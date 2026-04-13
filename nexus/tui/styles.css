@@ -1,0 +1,297 @@
+/* Nexus TUI Styles - Dark theme matching dashboard aesthetic */
+
+Screen {
+    background: #010409;
+}
+
+#app-container {
+    layout: grid;
+    grid-size: 2 4;
+    grid-columns: 3fr 2fr;
+    grid-rows: 1fr 1fr 1fr 60;
+}
+
+#chat-panel {
+    column-span: 1;
+    row-span: 4;
+    background: #0d1117;
+    border: solid #30363d;
+    border-top: solid #30363d;
+    border-left: solid #30363d;
+    border-right: none;
+    border-bottom: none;
+    padding: 1;
+}
+
+#thinking-panel {
+    column-span: 1;
+    row-span: 1;
+    background: #0d1117;
+    border: solid #30363d;
+    border-top: solid #30363d;
+    border-right: solid #30363d;
+    border-bottom: none;
+    border-left: none;
+    padding: 1;
+}
+
+#tool-panel {
+    column-span: 1;
+    row-span: 1;
+    background: #0d1117;
+    border: solid #30363d;
+    border-top: solid #30363d;
+    border-right: solid #30363d;
+    border-bottom: none;
+    border-left: none;
+    padding: 1;
+}
+
+#agents-panel {
+    column-span: 1;
+    row-span: 1;
+    background: #0d1117;
+    border: solid #30363d;
+    border-top: solid #30363d;
+    border-right: solid #30363d;
+    border-bottom: solid #30363d;
+    border-left: none;
+    padding: 1;
+}
+
+#input-bar {
+    column-span: 2;
+    background: #161b22;
+    border: solid #30363d;
+    border-top: solid #238636;
+    dock: bottom;
+    height: 60;
+    padding: 1 2;
+}
+
+#status-bar {
+    dock: bottom;
+    height: 3;
+    background: #161b22;
+    color: #8b949e;
+}
+
+.panel-header {
+    text-style: bold;
+    color: #c9d1d9;
+    background: #161b22;
+    padding: 0 1;
+}
+
+.message-row {
+    height: auto;
+    layout: horizontal;
+    padding: 0 1;
+}
+
+.message-row .timestamp {
+    color: #6e7681;
+    width: 6;
+}
+
+.message-row .role {
+    color: #8b949e;
+    width: 10;
+}
+
+.message-row .content {
+    color: #c9d1d9;
+    width: 100%;
+}
+
+#messages-container {
+    layout: vertical;
+    scrollbar-size: 1 1;
+}
+
+#messages-container > ChatMessageWidget {
+    height: auto;
+    margin: 0 0 1 0;
+}
+
+#thinking-container {
+    layout: vertical;
+    scrollbar-size: 1 1;
+}
+
+.thinking-block {
+    height: auto;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+.step-number {
+    color: #58a6ff;
+    width: 4;
+}
+
+.step-description {
+    color: #c9d1d9;
+}
+
+#tools-container {
+    layout: vertical;
+    scrollbar-size: 1 1;
+}
+
+.tool-status {
+    color: #c9d1d9;
+    height: 1;
+    padding: 0 1;
+}
+
+#agents-container {
+    layout: vertical;
+    scrollbar-size: 1 1;
+}
+
+.agent-card {
+    color: #c9d1d9;
+    height: 1;
+    padding: 0 1;
+}
+
+.input-bar {
+    background: #161b22;
+}
+
+.input-bar .prompt {
+    color: #238636;
+    width: 8;
+    text-style: bold;
+}
+
+.input-bar #command-input {
+    background: #0d1117;
+    color: #c9d1d9;
+    border: solid #30363d;
+}
+
+.input-bar #command-input:focus {
+    border: solid #238636;
+}
+
+.status-bar {
+    color: #8b949e;
+    background: #161b22;
+}
+
+/* Tool status colors */
+.tool-pending {
+    color: #8b949e;
+}
+
+.tool-running {
+    color: #58a6ff;
+}
+
+.tool-done {
+    color: #3fb950;
+}
+
+.tool-error {
+    color: #f85149;
+}
+
+/* Agent status colors */
+.agent-idle {
+    color: #8b949e;
+}
+
+.agent-thinking {
+    color: #58a6ff;
+}
+
+.agent-tool-use {
+    color: #d29922;
+}
+
+.agent-waiting {
+    color: #8b949e;
+}
+
+.agent-error {
+    color: #f85149;
+}
+
+/* Message role colors */
+.message-user {
+    color: #79c0ff;
+}
+
+.message-assistant {
+    color: #d2a8ff;
+}
+
+.message-system {
+    color: #8b949e;
+}
+
+.message-tool {
+    color: #ffa657;
+}
+
+/* Scrollbar styling */
+ScrollBar {
+    background: #21262d;
+}
+
+ScrollBar > Slider {
+    background: #484f58;
+}
+
+/* Focus styles */
+:focus {
+    border: solid #238636;
+}
+
+/* Selection */
+::selection {
+    background: #1f6feb;
+    color: #f0f6fc;
+}
+
+/* Loading spinner */
+.loading-spinner {
+    color: #58a6ff;
+}
+
+/* Progress bar */
+.progress-bar {
+    color: #3fb950;
+}
+
+/* Error text */
+.error-text {
+    color: #f85149;
+}
+
+/* Warning text */
+.warning-text {
+    color: #d29922;
+}
+
+/* Info text */
+.info-text {
+    color: #58a6ff;
+}
+
+/* Success text */
+.success-text {
+    color: #3fb950;
+}
+
+/* Dim text */
+.dim-text {
+    color: #8b949e;
+}
+
+/* Bright text */
+.bright-text {
+    color: #f0f6fc;
+}

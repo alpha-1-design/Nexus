@@ -3,108 +3,184 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>GENESIS COMMAND</title>
+    <title>Nexus Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background: #010409; color: #c9d1d9; font-family: ui-monospace, monospace; overflow-x: hidden; }
-        .card { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; width: 100%; }
+        body { background: #010409; color: #c9d1d9; font-family: ui-monospace, monospace; }
+        .card { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; }
         .terminal-container { background: #000; border-top: 2px solid #238636; position: fixed; bottom: 0; left: 0; width: 100%; padding: 12px; z-index: 100; }
         #console-box { background: rgba(0,0,0,0.9); border: 1px solid #1e3a8a; border-radius: 4px; }
         pre { white-space: pre-wrap; word-wrap: break-word; font-size: 10px; }
         input { background: transparent; border: none; outline: none; color: #3fb950; font-size: 16px; width: 100%; }
-        .btn { font-weight: bold; padding: 6px 10px; border-radius: 4px; text-transform: uppercase; font-size: 9px; transition: opacity 0.2s; }
+        .badge { font-size: 9px; padding: 2px 6px; border-radius: 4px; }
+        .badge-active { background: #238636; color: #fff; }
+        .badge-inactive { background: #30363d; color: #8b949e; }
     </style>
 </head>
-<body class="pb-64 px-4 pt-4">
+<body class="pb-80 px-4 pt-4">
     <header class="flex justify-between items-center mb-6">
         <div>
-            <h1 class="text-lg font-black text-white italic">REHOBOTH <span class="text-blue-500">GENESIS</span></h1>
-            <p class="text-[9px] text-gray-500 uppercase tracking-widest">Autonomous Nexus v1.0</p>
+            <h1 class="text-lg font-black text-white">REHOBOTH <span class="text-blue-500">NEXUS</span></h1>
+            <p class="text-[9px] text-gray-500 uppercase tracking-widest">AI Developer Agent</p>
         </div>
         <div class="text-[10px] text-right">
-            <span class="text-green-500 font-bold">● SYSTEM LIVE</span><br>
-            <button onclick="purgeSystem()" class="text-red-500 hover:text-red-400 font-bold">
-                [PURGE] DISK: {{ stats.DISK }}
-            </button>
+            <span id="system-status" class="text-gray-500">Loading...</span>
         </div>
     </header>
 
-    <div class="space-y-4">
-        {% for item in artifacts %}
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
         <div class="card p-4">
-            <div class="flex justify-between items-center mb-3">
-                <span class="text-blue-400 font-bold text-xs truncate mr-2">{{ item.name }}</span>
-                <div class="flex gap-2">
-                    <button onclick="runModule('{{ item.name }}')" class="btn bg-blue-600 text-white">Run</button>
-                    <button onclick="deploy('{{ item.name }}')" class="btn bg-[#238636] text-white">Vault</button>
-                </div>
-            </div>
-            <div class="bg-black p-3 rounded text-gray-400 border border-gray-800">
-                <pre><code>{{ item.code }}...</code></pre>
-            </div>
+            <h2 class="text-blue-400 text-xs font-bold mb-3 uppercase tracking-wider">Providers</h2>
+            <div id="providers-list" class="space-y-2 text-[10px]"></div>
         </div>
-        {% endfor %}
+        <div class="card p-4">
+            <h2 class="text-blue-400 text-xs font-bold mb-3 uppercase tracking-wider">Agent Stats</h2>
+            <div id="agent-stats" class="space-y-1 text-[10px]"></div>
+        </div>
+    </div>
+
+    <div class="card p-4 mb-4">
+        <h2 class="text-blue-400 text-xs font-bold mb-3 uppercase tracking-wider">Skills</h2>
+        <div id="skills-list" class="flex flex-wrap gap-2"></div>
+    </div>
+
+    <div class="card p-4 mb-4">
+        <h2 class="text-blue-400 text-xs font-bold mb-3 uppercase tracking-wider">Available Tools</h2>
+        <div id="tools-list" class="flex flex-wrap gap-1"></div>
+    </div>
+
+    <div class="card p-4 mb-4">
+        <h2 class="text-blue-400 text-xs font-bold mb-3 uppercase tracking-wider">Sessions</h2>
+        <div id="sessions-list" class="text-[10px] space-y-1"></div>
+    </div>
+
+    <div class="card p-4 mb-4">
+        <h2 class="text-purple-400 text-xs font-bold mb-3 uppercase tracking-wider">Automation</h2>
+        <div id="automation-status" class="text-[10px] space-y-1"></div>
+    </div>
+
+    <div class="card p-4 mb-4">
+        <h2 class="text-blue-400 text-xs font-bold mb-3 uppercase tracking-wider">Facts</h2>
+        <div id="facts-list" class="text-[10px] max-h-32 overflow-y-auto"></div>
     </div>
 
     <div id="console-box" class="fixed bottom-20 left-4 right-4 p-2 h-32 overflow-hidden shadow-2xl z-50">
-        <div class="text-[8px] text-blue-500 font-bold mb-1 tracking-tighter uppercase">Live System Pulse</div>
-        <pre id="log-content" class="text-[9px] text-green-400 opacity-80 leading-tight">Waiting for heartbeat...</pre>
+        <div class="text-[8px] text-blue-500 font-bold mb-1 tracking-tighter uppercase">Nexus System</div>
+        <pre id="log-content" class="text-[9px] text-green-400 opacity-80 leading-tight">Initializing...</pre>
     </div>
 
     <div class="terminal-container">
         <div class="flex items-center gap-2">
             <span class="text-green-500 font-bold text-sm">CMD:></span>
-            <input type="text" id="cmdInput" placeholder="Order Directive..." autocomplete="off" onkeypress="handleEnter(event)">
+            <input type="text" id="cmdInput" placeholder="Enter instruction..." autocomplete="off" onkeypress="handleEnter(event)">
         </div>
         <div id="feedback" class="text-[10px] mt-1 text-gray-500 italic">Awaiting instructions.</div>
     </div>
 
     <script>
-        function updateLogs() {
-            fetch('/logs').then(res => res.text()).then(data => {
-                document.getElementById('log-content').innerText = data;
-            });
+        async function loadStatus() {
+            const status = await fetch('/api/status').then(r => r.json());
+            document.getElementById('system-status').innerHTML =
+                `<span class="text-green-500 font-bold">● ONLINE</span><br>Termux: ${status.termux_env ? 'Yes' : 'No'}`;
         }
-        setInterval(updateLogs, 3000);
 
-        function purgeSystem() {
-            if(confirm("DANGER: This will wipe non-essential evolutions and logs. Continue?")) {
-                fetch('/purge').then(res => res.json()).then(data => {
-                    alert(data.message);
-                    location.reload();
-                });
+        async function loadProviders() {
+            const data = await fetch('/api/providers').then(r => r.json());
+            const el = document.getElementById('providers-list');
+            el.innerHTML = data.providers.map(p => `
+                <div class="flex justify-between">
+                    <span class="text-gray-300">${p.name}</span>
+                    <span class="${p.active ? 'text-green-400' : 'text-gray-600'}">${p.model || 'N/A'}</span>
+                </div>
+            `).join('') || '<div class="text-gray-500">No providers configured</div>';
+        }
+
+        async function loadAgentStats() {
+            const data = await fetch('/api/agent/stats').then(r => r.json());
+            const el = document.getElementById('agent-stats');
+            el.innerHTML = Object.entries(data).map(([k, v]) =>
+                `<div><span class="text-gray-500">${k}:</span> <span class="text-gray-300">${v}</span></div>`
+            ).join('');
+        }
+
+        async function loadSkills() {
+            const data = await fetch('/api/skills').then(r => r.json());
+            const el = document.getElementById('skills-list');
+            el.innerHTML = data.skills.map(s =>
+                `<span class="badge ${s.active ? 'badge-active' : 'badge-inactive'}">${s.name}</span>`
+            ).join('') || '<span class="text-gray-500 text-[10px]">No skills loaded</span>';
+        }
+
+        async function loadTools() {
+            const data = await fetch('/api/tools').then(r => r.json());
+            const el = document.getElementById('tools-list');
+            el.innerHTML = data.tools.map(t =>
+                `<span class="bg-gray-800 text-gray-300 px-2 py-1 rounded text-[9px]">${t.name}</span>`
+            ).join('');
+        }
+
+        async function loadSessions() {
+            const data = await fetch('/api/sessions').then(r => r.json());
+            const el = document.getElementById('sessions-list');
+            el.innerHTML = data.sessions.map(s =>
+                `<div><span class="text-gray-500">${s.id}</span> — ${s.turn_count} turns</div>`
+            ).join('') || '<div class="text-gray-500">No sessions</div>';
+        }
+
+        async function loadFacts() {
+            const data = await fetch('/api/facts').then(r => r.json());
+            const el = document.getElementById('facts-list');
+            el.innerHTML = data.facts.map(f =>
+                `<div class="text-gray-300">${f.content}</div>`
+            ).join('') || '<div class="text-gray-500">No facts stored</div>';
+        }
+
+        async function loadAutomation() {
+            try {
+                const data = await fetch('/api/automation/status').then(r => r.json());
+                const ad = data.anti_detection || {};
+                const tools = data.automation_tools || [];
+                document.getElementById('automation-status').innerHTML = `
+                    <div class="flex gap-2 flex-wrap mb-2">
+                        <span class="badge ${data.playwright_available ? 'badge-active' : 'badge-inactive'}">Playwright</span>
+                        <span class="badge ${data.browser_session_active ? 'badge-active' : 'badge-inactive'}">Browser Session</span>
+                        <span class="badge ${data.httpx_available ? 'badge-active' : 'badge-inactive'}">HTTP Client</span>
+                    </div>
+                    <div class="text-gray-400">${tools.length} automation tools</div>
+                    <div class="text-gray-500 text-[9px] mt-1">Stealth: ${ad.stealth_scripts} scripts | UA rotation: ${ad.user_agent_rotation} | CAPTCHA: ${ad.captcha_detection} | Human-like: ${ad.human_like_behavior}</div>
+                `;
+            } catch(e) {
+                document.getElementById('automation-status').innerHTML = '<div class="text-gray-500">Automation API unavailable</div>';
             }
+        }
+
+        async function loadLogs() {
+            try {
+                const data = await fetch('/logs').then(r => r.text());
+                document.getElementById('log-content').innerText = data.slice(-500);
+            } catch(e) {}
         }
 
         function handleEnter(e) {
             if (e.key === 'Enter') {
                 const input = document.getElementById('cmdInput');
                 const feedback = document.getElementById('feedback');
-                feedback.innerText = "Generating Evolution...";
-                fetch('/execute', {
+                feedback.innerText = "Processing...";
+                fetch('/api/execute', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({instruction: input.value})
                 }).then(res => res.json()).then(data => {
-                    feedback.innerText = data.feedback;
+                    feedback.innerText = data.response || 'Done.';
                     input.value = '';
-                    setTimeout(() => location.reload(), 1500);
+                }).catch(() => {
+                    feedback.innerText = "Error executing command.";
                 });
             }
         }
 
-        function runModule(filename) {
-            fetch('/run/' + filename).then(res => res.json()).then(data => {
-                alert(data.message);
-            });
-        }
-
-        function deploy(filename) {
-            fetch('/deploy/' + filename).then(res => res.json()).then(data => {
-                alert(data.message);
-            });
-        }
+        loadStatus(); loadProviders(); loadAgentStats(); loadSkills(); loadTools(); loadSessions(); loadAutomation(); loadFacts();
+        setInterval(() => { loadLogs(); loadSessions(); loadAutomation(); loadFacts(); }, 5000);
     </script>
 </body>
 </html>
-
