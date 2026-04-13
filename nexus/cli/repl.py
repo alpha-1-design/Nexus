@@ -74,6 +74,62 @@ class REPL:
         
         self._check_resume_session()
 
+    async def _ensure_provider(self) -> None:
+        """Ensure a working provider is configured. Auto-setup OpenCode Zen if needed."""
+        try:
+            # Try to get the active provider
+            provider = await self.manager.get_provider()
+            # Quick ping to verify it works
+            await provider.complete([Message(role="user", content="ping")], None)
+            return
+        except Exception:
+            pass
+
+        # No working provider — try OpenCode Zen free models
+        print("\n\033[33m⚠ No working AI provider found.\033[0m")
+        print("Trying OpenCode Zen free models (no API key needed)...\n")
+
+        try:
+            from ..providers.base import PROVIDER_REGISTRY
+            from ..config import ProviderConfig, save_config
+            from .. import config as cfg_module
+
+            opencode_config = ProviderConfig(
+                name="opencode-zen",
+                provider_type="openai",
+                api_key="",
+                base_url="https://opencode.ai/zen/v1",
+                model="minimax-m2.5-free",
+                max_tokens=8192,
+                temperature=0.7,
+                timeout=120,
+                enabled=True,
+            )
+
+            prov = PROVIDER_REGISTRY["openai"]({
+                "api_key": "",
+                "base_url": "https://opencode.ai/zen/v1",
+                "model": "minimax-m2.5-free",
+                "timeout": 120,
+            })
+            await prov.complete([Message(role="user", content="ping")], None)
+
+            # Works — save to config
+            self.manager.configs["opencode-zen"] = opencode_config
+            self.manager.providers["opencode-zen"] = prov
+            self.manager.active_provider = "opencode-zen"
+
+            # Persist
+            full_config = cfg_module.load_config()
+            full_config.providers = {"opencode-zen": opencode_config}
+            full_config.active_provider = "opencode-zen"
+            save_config(full_config)
+
+            print("\033[92m✓ Connected to OpenCode Zen (minimax-m2.5-free)\033[0m\n")
+        except Exception as e:
+            print(f"\n\033[91m✗ Could not connect to OpenCode Zen: {e}\033[0m")
+            print("\nRun \033[1mnexus setup\033[0m to configure a provider manually.\n")
+
     def _check_resume_session(self) -> None:
         """Check for previous session and offer to resume."""
         recent = self.session_loader.get_most_recent_session()
@@ -1011,12 +1067,16 @@ Available commands:
 async def run_repl(config: dict[str, Any] | None = None) -> None:
     """Run the REPL."""
     repl = REPL(config)
+    await repl._ensure_provider()
     await repl.run()
 
 
 async def run_task(task: str, config: dict[str, Any] | None = None) -> str:
     """Run a single task."""
     repl = REPL(config)
+    await repl._ensure_provider()
     result = await repl.run_single(task)
     await repl.manager.close_all()
     return result
+
+

@@ -117,12 +117,12 @@ class OpenAIProvider(BaseProvider):
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
+                headers=headers,
                 timeout=self.timeout,
             )
         return self._client

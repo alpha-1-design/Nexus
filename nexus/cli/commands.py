@@ -1,6 +1,7 @@
 """Nexus CLI - Command line interface for Rehoboth Genesis."""
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ import click
 from .. import __version__
 from ..config import NexusConfig, ProviderConfig, load_config, save_config
 from ..providers import get_manager
+from ..providers.base import Message
 from ..tools import get_registry
 
 
@@ -503,6 +505,331 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     click.echo(f"Set {key} = {value}")
 
 
+# Setup command
+OPENCODE_ZEN_FREE_MODELS = [
+    ("minimax-m2.5-free", "MiniMax M2.5 — Best all-around, fastest", "free"),
+    ("big-pickle", "Big Pickle — OpenCode's own model", "free"),
+    ("qwen3.6-plus-free", "Qwen 3.6 Plus — Large context window", "free"),
+    ("nemotron-3-super-free", "Nemotron 3 Super — NVIDIA's best free", "free"),
+]
+
+PROVIDER_OPTIONS = [
+    ("opencode-zen", "OpenCode Zen", "Recommended", "Best free models, no key needed for free tier"),
+    ("opencode-go", "OpenCode Go", "Premium", "Kimi K2.5, GLM 5, MiniMax M2.7 (paid)"),
+    ("groq", "Groq", "Free tier", "Llama-3.3-70B, Mixtral — fast inference"),
+    ("openrouter", "OpenRouter", "100+ models", "Access to dozens of providers, has free models"),
+    ("anthropic", "Anthropic", "Premium", "Claude Sonnet 4, Opus 4 — best reasoning"),
+    ("openai", "OpenAI", "Premium", "GPT-4o, GPT-4o-mini — reliable"),
+    ("google", "Google Gemini", "Free + Paid", "Gemini 2.0 Flash — fast, good free tier"),
+    ("ollama", "Ollama", "Local", "Run models locally on your machine (private)"),
+]
+
+API_KEY_INSTRUCTIONS = {
+    "opencode-zen": "Get your free key at https://opencode.ai/zen (optional for free models)",
+    "opencode-go": "Get your subscription key at https://opencode.ai/zen/go",
+    "groq": "Get free key at https://console.groq.com/keys",
+    "openrouter": "Get key at https://openrouter.ai/keys",
+    "anthropic": "Get key at https://console.anthropic.com/settings/keys",
+    "openai": "Get key at https://platform.openai.com/api-keys",
+    "google": "Get key at https://aistudio.google.com/app/apikey",
+    "ollama": "No key needed — runs locally (run: ollama serve)",
+}
+
+
+@cli.command("setup")
+@click.option("--provider", help="Provider name (skip interactive mode)")
+@click.option("--model", help="Model name (skip interactive mode)")
+@click.option("--api-key", help="API key (skip interactive mode)")
+@click.option("--non-interactive", is_flag=True, help="Use defaults or env vars (for CI)")
+@click.pass_context
+def setup_cmd(
+    ctx: click.Context,
+    provider: str | None,
+    model: str | None,
+    api_key: str | None,
+    non_interactive: bool,
+) -> None:
+    """Interactive setup wizard — configure your AI provider in seconds.
+    
+    Guides you through selecting a provider, model, and API key.
+    OpenCode Zen is recommended for zero-cost setup.
+    
+    Examples:
+    
+        nexus setup                     Interactive wizard
+        nexus setup --non-interactive   Use env vars or defaults
+        nexus setup --provider groq      Quick setup for a specific provider
+    """
+    config: NexusConfig = ctx.obj["config"]
+
+    # Auto-detect Termux
+    is_termux = (
+        os.path.exists("/data/data/com.termux/files/usr/bin/termux-audio")
+        or os.environ.get("TERMUX_VERSION")
+    )
+
+    # Banner
+    click.echo("\n" + "=" * 50)
+    click.echo("  ⚡ NEXUS SETUP WIZARD")
+    click.echo("=" * 50)
+    if is_termux:
+        click.echo("  [Detected: Termux/Android]")
+    else:
+        click.echo("  [Detected: Linux/macOS/Windows]")
+    click.echo("")
+
+    # --- Provider selection ---
+    if provider and provider not in [p[0] for p in PROVIDER_OPTIONS]:
+        click.echo(f"Unknown provider: {provider}", err=True)
+        click.echo(f"Valid: {', '.join(p[0] for p in PROVIDER_OPTIONS)}")
+        return
+
+    if not provider:
+        click.echo("  Select your AI provider:\n")
+        for i, (pid, name, badge, desc) in enumerate(PROVIDER_OPTIONS, 1):
+            badge_color = "green" if badge == "Recommended" else "yellow" if badge == "Free tier" or badge == "Local" else "cyan"
+            click.echo(f"  {i}. {name}")
+            click.echo(f"     [{badge_color}]{badge}[/{badge_color}] {desc}")
+        click.echo("")
+
+        choice = click.prompt(
+            "Enter number (1-8)",
+            type=click.IntRange(1, len(PROVIDER_OPTIONS)),
+            default=1,
+            show_default=False,
+        )
+        provider = PROVIDER_OPTIONS[choice - 1][0]
+    else:
+        _, name, badge, desc = next(p for p in PROVIDER_OPTIONS if p[0] == provider)
+        click.echo(f"  Provider: {name} [{badge}]\n")
+
+    # --- Model selection ---
+    if provider == "opencode-zen":
+        model_choices = OPENCODE_ZEN_FREE_MODELS
+        if not model:
+            if non_interactive:
+                model = model_choices[0][0]
+            else:
+                click.echo("  Free models available on OpenCode Zen:\n")
+                for i, (mid, mname, mbadge) in enumerate(model_choices, 1):
+                    click.echo(f"  {i}. {mname} [{mbadge}]")
+                click.echo("")
+                mchoice = click.prompt(
+                    "Enter number",
+                    type=click.IntRange(1, len(model_choices)),
+                    default=1,
+                    show_default=False,
+                )
+                model = model_choices[mchoice - 1][0]
+        click.echo(f"  Model: {model}\n")
+    else:
+        if not model:
+            if non_interactive:
+                model = get_default_model(provider)
+            else:
+                model = click.prompt("  Model name", default=get_default_model(provider))
+        click.echo(f"  Model: {model}\n")
+
+    # --- API key ---
+    if provider == "ollama":
+        api_key = ""
+        click.echo("  No API key needed for Ollama (runs locally)\n")
+    else:
+        if non_interactive:
+            env_key = os.environ.get(f"{provider.upper()}_API_KEY", "")
+            api_key = api_key or env_key or ""
+        else:
+            instruction = API_KEY_INSTRUCTIONS.get(provider, "")
+            if instruction:
+                click.echo(f"  {instruction}")
+            api_key = click.prompt(
+                "  API Key (press Enter to skip)",
+                default="",
+                show_default=False,
+                hide_input=True,
+            )
+            if not api_key:
+                click.echo("  [Skipped — some models may not work without a key]")
+
+    # --- Base URL ---
+    base_url = get_base_url(provider)
+    click.echo("")
+
+    # --- Test connection ---
+    click.echo("  Testing connection...", nl=False)
+    test_result = test_provider_connection(provider, model, api_key, base_url)
+    if test_result["ok"]:
+        click.echo(" \u2713 OK")
+    else:
+        click.echo(f" \u2717 FAILED: {test_result['error']}")
+        click.echo("")
+        if not click.confirm("  Save anyway? (you can fix the key later)", default=False):
+            return
+
+    # --- Save config ---
+    provider_config = ProviderConfig(
+        name=provider,
+        provider_type=get_provider_type(provider),
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        max_tokens=8192,
+        temperature=0.7,
+        timeout=120,
+        enabled=True,
+    )
+
+    config.providers = {provider: provider_config}
+    config.active_provider = provider
+    save_config(config)
+
+    click.echo("")
+    click.echo("  \u2705 Setup complete!\n")
+
+    # Print cheatsheet
+    print_cheatsheet(provider, model, is_termux)
+
+
+def test_provider_connection(provider: str, model: str, api_key: str, base_url: str | None) -> dict:
+    """Test if a provider+model works."""
+    try:
+        import httpx
+
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        if provider in ("opencode-zen", "opencode-go"):
+            url = f"{base_url}/chat/completions"
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 5,
+            }
+        elif provider == "openai":
+            url = "https://api.openai.com/v1/chat/completions"
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 5,
+            }
+        elif provider == "anthropic":
+            url = "https://api.anthropic.com/v1/messages"
+            headers["x-api-key"] = api_key or ""
+            headers["anthropic-version"] = "2023-06-01"
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 5,
+            }
+        elif provider == "google":
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            params = {"key": api_key or ""}
+            payload = {"contents": [{"parts": [{"text": "hi"}]}]}
+        elif provider == "groq":
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 5,
+            }
+        elif provider == "openrouter":
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 5,
+            }
+        elif provider == "ollama":
+            url = f"{base_url}/api/chat"
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            }
+        else:
+            return {"ok": False, "error": f"Unknown provider: {provider}"}
+
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(url, json=payload, headers=headers, params=params if provider == "google" else None)
+
+        if resp.status_code == 200:
+            return {"ok": True}
+        elif resp.status_code == 401:
+            return {"ok": False, "error": "Invalid API key"}
+        elif resp.status_code == 429:
+            return {"ok": False, "error": "Rate limited — try again in a moment"}
+        else:
+            try:
+                msg = resp.json().get("error", {}).get("message", resp.text[:100])
+            except Exception:
+                msg = resp.text[:100]
+            return {"ok": False, "error": f"HTTP {resp.status_code}: {msg}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:100]}
+
+
+def get_default_model(provider: str) -> str:
+    defaults = {
+        "groq": "llama-3.3-70b-versatile",
+        "openai": "gpt-4o-mini",
+        "anthropic": "claude-sonnet-4-20250514",
+        "google": "gemini-2.0-flash",
+        "openrouter": "google/gemma-3-27b-it:free",
+        "ollama": "qwen2.5-coder:7b",
+        "opencode-zen": "minimax-m2.5-free",
+        "opencode-go": "kimi-k2.5",
+    }
+    return defaults.get(provider, "gpt-4o")
+
+
+def get_provider_type(provider: str) -> str:
+    types = {
+        "opencode-zen": "openai",
+        "opencode-go": "openai",
+        "anthropic": "anthropic",
+        "google": "google",
+        "ollama": "openai",
+    }
+    return types.get(provider, provider)
+
+
+def get_base_url(provider: str) -> str | None:
+    urls = {
+        "opencode-zen": "https://opencode.ai/zen/v1",
+        "opencode-go": "https://opencode.ai/zen/go/v1",
+        "ollama": os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+    }
+    return urls.get(provider)
+
+
+def print_cheatsheet(provider: str, model: str, is_termux: bool) -> None:
+    click.echo("=" * 50)
+    click.echo("  QUICK REFERENCE")
+    click.echo("=" * 50)
+    click.echo("")
+    click.echo("  # Start chatting")
+    if is_termux:
+        click.echo("  nexus repl")
+    else:
+        click.echo("  nexus repl")
+    click.echo("")
+    click.echo("  # Run a single task")
+    click.echo("  nexus run \"Fix the login bug\"")
+    click.echo("")
+    click.echo("  # Dashboard (optional web UI)")
+    click.echo("  nexus dashboard")
+    click.echo("")
+    click.echo("  # Voice mode (speak to Nexus)")
+    click.echo("  nexus voice")
+    click.echo("")
+    click.echo("  # Help")
+    click.echo("  nexus repl  # then type /help")
+    click.echo("")
+    click.echo("  Current: " + provider + " / " + model)
+    click.echo("")
+
+
 # Doctor command
 @cli.command()
 @click.pass_context
@@ -854,7 +1181,19 @@ def main():
     config = load_config()
     config.ensure_dirs()
     initialize_providers(config)
-    
+
+    # Check if any provider is configured and enabled
+    has_enabled = any(p.enabled for p in config.providers.values())
+    if not has_enabled:
+        click.echo(
+            "\n  \u26a0\ufe0f  No AI provider configured. Run 'nexus setup' to get started.\n"
+            "  \u2192  Recommended: 'nexus setup' (interactive, takes 30 seconds)\n"
+            "  \u2192  Quick:     'nexus setup --provider opencode-zen'\n"
+            "  \u2192  Env vars:  Set OPENCODE_ZEN_API_KEY, then 'nexus setup --non-interactive'\n"
+            "  \u2192  Free:      OpenCode Zen has free models — no API key needed.\n",
+            err=True,
+        )
+
     # Run CLI
     cli(obj={"config": config})
 
