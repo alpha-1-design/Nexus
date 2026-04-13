@@ -1,4 +1,4 @@
-"""Nexus CLI - Command line interface for Rehoboth Genesis."""
+"""Nexus CLI - Command line interface for Nexus."""
 
 import asyncio
 import os
@@ -20,7 +20,7 @@ from ..tools import get_registry
 @click.option("--config", type=click.Path(), help="Path to config file")
 @click.pass_context
 def cli(ctx: click.Context, config: str | None) -> None:
-    """Rehoboth Genesis - Your AI Coding Agent.
+    """Nexus - Your AI Coding Agent.
     
     A powerful, self-hosted AI coding agent that combines the best features
     of OpenClaw, Claude Code, Gemini CLI, OpenCode, and NemoClaw.
@@ -1083,7 +1083,7 @@ def repl(ctx: click.Context) -> None:
     from ..config import load_config
     config = load_config()
     config_dict = {
-        "providers": {k: v.model_dump() for k, v in config.providers.items()},
+        "providers": {k: v.to_dict() for k, v in config.providers.items()},
         "active_provider": config.active_provider,
         "config_dir": str(config.config_dir),
     }
@@ -1103,12 +1103,13 @@ def run(ctx: click.Context, task: str) -> None:
     from ..config import load_config
     config = load_config()
     config_dict = {
-        "providers": {k: v.model_dump() for k, v in config.providers.items()},
+        "providers": {k: v.to_dict() for k, v in config.providers.items()},
         "active_provider": config.active_provider,
         "config_dir": str(config.config_dir),
     }
-    result = asyncio.run(run_task(task, config=config_dict))
-    click.echo(result)
+    result, was_streamed = asyncio.run(run_task(task, config=config_dict))
+    if result and not was_streamed:
+        click.echo(result)
 
 
 # Automation commands

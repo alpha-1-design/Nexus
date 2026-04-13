@@ -254,7 +254,7 @@ class REPL:
 
         return f"""{voice_prompt}
 
-You are an AI coding assistant powered by Rehoboth Genesis.
+You are an AI coding assistant powered by Nexus.
 
 You have access to the following tools:
 {self._format_tools()}
@@ -273,7 +273,7 @@ Focus on being helpful, accurate, and efficient.
             lines.append(f"- {tool.name}: {tool.description}")
         return "\n".join(lines)
 
-    async def _generate_response(self, user_input: str) -> str:
+    async def _generate_response(self, user_input: str, print_result: bool = True) -> str:
         """Generate a response from the AI."""
         # Add user message
         self.messages.append(Message(role="user", content=user_input))
@@ -355,11 +355,8 @@ Focus on being helpful, accurate, and efficient.
                                 self.session.tools_used.append(chunk.tool_call.name)
 
                 print()  # Newline after streaming
-
-                # Add assistant response
-                if response_text:
-                    self.messages.append(Message(role="assistant", content=response_text))
-                    self.session.messages.append({"role": "assistant", "content": response_text})
+                final_content = response_text
+                streaming_done = True
 
             else:
                 response = await self.manager.complete(messages, tools)
@@ -392,15 +389,16 @@ Focus on being helpful, accurate, and efficient.
                             tool_call_id=tool_call.id,
                         ))
 
-                # Get final response
+                # Get final response (may be after tool results)
                 response = await self.manager.complete(messages, tools)
-                print(response.content)
+                final_content = response.content
+                streaming_done = False
 
-                self.messages.append(Message(role="assistant", content=response.content))
-                self.session.messages.append({"role": "assistant", "content": response.content})
+            if print_result and final_content and not streaming_done:
+                print(final_content)
 
             self.memory.save_session(self.session)
-            return ""
+            return final_content
 
         except Exception as e:
             return f"Error: {e}"
@@ -944,7 +942,7 @@ Available commands:
         greeting = self.personality.greet()
         print(f"""
 ╔══════════════════════════════════════════════════════════╗
-║           Rehoboth Genesis - Nexus Agent                 ║
+║                    Nexus AI Agent                        ║
 ║                                                           ║
 ║  {greeting:<53} ║
 ║  Type /help for commands, or just start chatting.         ║
@@ -1059,9 +1057,9 @@ Available commands:
         tool_count = self._tool_call_count
         print(f"\n\033[92m✅ Done in {elapsed:.1f}s\033[0m — {tool_count} tool call(s)")
 
-    async def run_single(self, task: str) -> str:
-        """Run a single task and return the result."""
-        return await self._generate_response(task)
+    async def run_single(self, task: str) -> tuple[str, bool]:
+        """Run a single task and return (result, was_streamed)."""
+        return await self._generate_response(task, print_result=False), self.streaming
 
 
 async def run_repl(config: dict[str, Any] | None = None) -> None:
@@ -1071,12 +1069,12 @@ async def run_repl(config: dict[str, Any] | None = None) -> None:
     await repl.run()
 
 
-async def run_task(task: str, config: dict[str, Any] | None = None) -> str:
-    """Run a single task."""
+async def run_task(task: str, config: dict[str, Any] | None = None) -> tuple[str, bool]:
+    """Run a single task. Returns (result, was_streamed)."""
     repl = REPL(config)
     await repl._ensure_provider()
-    result = await repl.run_single(task)
+    result, streamed = await repl.run_single(task)
     await repl.manager.close_all()
-    return result
+    return result, streamed
 
 

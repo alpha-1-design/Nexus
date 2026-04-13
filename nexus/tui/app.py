@@ -45,7 +45,7 @@ class NexusTUI(App):
 
     CSS_PATH = "styles.css"
     TITLE = "Nexus - Terminal User Interface"
-    SUB_TITLE = "Rehoboth Genesis"
+    SUB_TITLE = "Nexus"
 
     BINDINGS = [
         Binding("ctrl+c", "interrupt", "Interrupt", priority=True),

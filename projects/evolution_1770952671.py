@@ -32,7 +32,7 @@ def execute_evolution(filename):
 
 def monitor_and_sync():
     """The Heartbeat loop."""
-    log_event("SYSTEM START: Rehoboth Genesis Manifest Online")
+    log_event("SYSTEM START: Nexus Manifest Online")
     
     with ThreadPoolExecutor(max_workers=5) as executor:
         while True:

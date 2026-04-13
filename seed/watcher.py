@@ -48,7 +48,7 @@ if __name__ == "__main__":
     observer = Observer()
     observer.schedule(event_handler, PROJECTS_DIR, recursive=False)
     
-    print("Rehoboth Genesis Watcher: Online and parsing...")
+    print("Nexus Watcher: Online and parsing...")
     observer.start()
     try:
         while True:

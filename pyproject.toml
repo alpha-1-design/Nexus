@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nexus"
 version = "0.1.0"
-description = "Rehoboth Genesis - A powerful self-hosted AI coding agent"
+description = "Nexus - A powerful self-hosted AI coding agent"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
-    {name = "Rehoboth Genesis Team"}
+    {name = "Nexus Team"}
 ]
 keywords = ["ai", "coding", "agent", "cli", "llm", "openai", "anthropic", "gemini"]
 classifiers = [
