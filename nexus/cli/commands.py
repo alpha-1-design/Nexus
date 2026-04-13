@@ -1182,18 +1182,6 @@ def main():
     config.ensure_dirs()
     initialize_providers(config)
 
-    # Check if any provider is configured and enabled
-    has_enabled = any(p.enabled for p in config.providers.values())
-    if not has_enabled:
-        click.echo(
-            "\n  \u26a0\ufe0f  No AI provider configured. Run 'nexus setup' to get started.\n"
-            "  \u2192  Recommended: 'nexus setup' (interactive, takes 30 seconds)\n"
-            "  \u2192  Quick:     'nexus setup --provider opencode-zen'\n"
-            "  \u2192  Env vars:  Set OPENCODE_ZEN_API_KEY, then 'nexus setup --non-interactive'\n"
-            "  \u2192  Free:      OpenCode Zen has free models — no API key needed.\n",
-            err=True,
-        )
-
     # Run CLI
     cli(obj={"config": config})
 
