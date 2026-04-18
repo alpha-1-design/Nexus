@@ -4,11 +4,11 @@ import requests
 import os
 import sys
 
-class NexusGenesis:
+class Nexus:
     def __init__(self, model="qwen2.5-coder:0.5b"):
         self.model = model
         self.api_url = "http://localhost:11434/api/generate"
-        self.project_dir = os.path.join(os.getcwd(), "rehoboth-genesis-project")
+        self.project_dir = os.path.join(os.getcwd(), "nexus-project")
         os.makedirs(self.project_dir, exist_ok=True)
         
     def log(self, level, msg):
@@ -53,6 +53,6 @@ touch test/app.py
                 self.log("INFO", "Success.")
 
 if __name__ == "__main__":
-    agent = NexusGenesis()
+    agent = Nexus()
     task = sys.argv[1] if len(sys.argv) > 1 else "Create a simple time API"
     agent.run_mission(task)

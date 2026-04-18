@@ -58,8 +58,8 @@ all = [
 nexus = "nexus.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/rehoboth-genesis/nexus"
-Repository = "https://github.com/rehoboth-genesis/nexus"
+Homepage = "https://github.com/nexus-ai/nexus"
+Repository = "https://github.com/nexus-ai/nexus"
 
 [tool.setuptools]
 packages = ["nexus", "nexus.agent", "nexus.cli", "nexus.providers", "nexus.tools", "nexus.memory", "nexus.utils", "nexus.dashboard", "nexus.mcp", "nexus.plugins", "nexus.skills", "nexus.termux", "nexus.tui", "nexus.sessions", "nexus.automation"]

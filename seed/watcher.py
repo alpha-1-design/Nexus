@@ -7,7 +7,7 @@ from generator import expand_code
 
 PROJECTS_DIR = "projects"
 
-class GenesisHandler(FileSystemEventHandler):
+class NexusHandler(FileSystemEventHandler):
     def on_created(self, event):
         # Only act on new Python files that aren't already evolutions
         if event.src_path.endswith(".py") and "evolution" not in event.src_path:
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     if not os.path.exists(PROJECTS_DIR):
         os.makedirs(PROJECTS_DIR)
     
-    event_handler = GenesisHandler()
+    event_handler = NexusHandler()
     observer = Observer()
     observer.schedule(event_handler, PROJECTS_DIR, recursive=False)
     

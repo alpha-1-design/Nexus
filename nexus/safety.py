@@ -68,7 +68,7 @@ class Rule:
         if self.pattern and path:
             return bool(re.search(self.pattern, path))
 
-        return bool(self.pattern is None and path)
+        return False
 
 
 @dataclass

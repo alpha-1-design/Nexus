@@ -29,7 +29,7 @@ def push_to_github(filename):
         origin = repo.remote(name='origin')
         
         # We set the URL to the clean version you just verified manually
-        clean_url = "https://github.com/alpha-1-design/rehoboth-genesis.git"
+        clean_url = "https://github.com/nexus-ai/nexus.git"
         # Insert the token into the URL properly
         auth_url = clean_url.replace("https://", f"https://{GITHUB_TOKEN}@")
         origin.set_url(auth_url)

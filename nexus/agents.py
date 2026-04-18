@@ -10,6 +10,20 @@ from enum import Enum
 from typing import Any, Callable
 import asyncio
 import uuid
+import itertools
+
+_team_counter = itertools.count(1)
+_agent_counter = itertools.count(1)
+_msg_counter = itertools.count(1)
+
+def _next_team_id() -> str:
+    return str(next(_team_counter))
+
+def _next_agent_id() -> str:
+    return str(next(_agent_counter))
+
+def _next_msg_id() -> str:
+    return str(next(_msg_counter))
 
 class AgentRole(Enum):
     LEAD = "lead"           # Main Nexus agent, coordinates
@@ -81,24 +95,24 @@ Be specific about what tools to use and what the expected outcome is.
 When collaborating with other agents, be direct and concise. 
 Use @agentname to mention specific agents.""",
         
-        AgentRole.CODER: """You are a CODER agent. Your job is to write clean, efficient code.
-Read existing code before modifying. Make small, focused changes.
-When stuck, ask the planner for clarification. When done, notify the reviewer.
-Use @planner to ask questions. Use @reviewer to request review.""",
+AgentRole.CODER: """You are a CODER agent. Your job is to write clean, efficient code.
+        Read existing code before modifying. Make small, focused changes.
+        When stuck, ask the planner for clarification. When done, notify the reviewer.
+        Use @planner to ask questions. Use @reviewer to request review.""",
         
         AgentRole.REVIEWER: """You are a REVIEWER agent. Your job is to review code changes for bugs, 
-security issues, style problems, and best practices.
-Be thorough but constructive. Point out specific issues with line numbers.
-When you approve, say so clearly. Use @coder to request fixes.""",
+        security issues, style problems, and best practices.
+        Be thorough but constructive. Point out specific issues with line numbers.
+        When you approve, say so clearly. Use @coder to request fixes.""",
         
         AgentRole.TESTER: """You are a TESTER agent. Your job is to write comprehensive tests.
-Cover happy paths and edge cases. Run tests and report results clearly.
-Use @coder to request test data or fixtures. Use @reviewer if you find bugs.""",
+        Cover happy paths and edge cases. Run tests and report results clearly.
+        Use @coder to request test data or fixtures. Use @reviewer if you find bugs.""",
         
         AgentRole.RESEARCHER: """You are a RESEARCHER agent. Your job is to find information,
-documentation, code examples, and best practices online.
-Cite your sources. Summarize findings concisely.
-Use @planner or @coder to share relevant findings.""",
+        documentation, code examples, and best practices online.
+        Cite your sources. Summarize findings concisely.
+        Use @planner or @coder to share relevant findings.""",
     }
 
     ROLE_COLORS = {
@@ -111,23 +125,28 @@ Use @planner or @coder to share relevant findings.""",
     }
 
     def __init__(self, lead_name: str = "nexus", provider_manager=None):
-        self.team_id = str(uuid.uuid4())[:8]
+        self.team_id = _next_team_id()
         self.lead_name = lead_name
         self.pm = provider_manager
         self.agents: dict[str, Agent] = {}
         self.team_messages: list[TeamMessage] = []
         self._callbacks: list[Callable] = []
         self._lock = asyncio.Lock()
-    
-    @property
-    def lead(self) -> Agent | None:
-        return next((a for a in self.agents.values() if a.role == AgentRole.LEAD), None)
+        self._agent_counter = 0
+        self.lead_name = lead_name
+        self.pm = provider_manager
+        self.agents: dict[str, Agent] = {}
+        self.team_messages: list[TeamMessage] = []
+        self._callbacks: list[Callable] = []
+        self._lock = asyncio.Lock()
+        self._agent_counter = 0
     
     def spawn(self, role: AgentRole, name: str | None = None, 
               task: str | None = None, model: str | None = None) -> Agent:
         """Spawn a new agent with the given role."""
-        agent_id = str(uuid.uuid4())[:8]
-        agent_name = name or f"{role.value}_{agent_id}"
+        self._agent_counter += 1
+        agent_id = str(self._agent_counter)
+        agent_name = name or f"{role.value}-{agent_id}"
         
         agent = Agent(
             agent_id=agent_id,
@@ -140,7 +159,7 @@ Use @planner or @coder to share relevant findings.""",
         
         self.agents[agent_id] = agent
         
-        self._broadcast_system(f"🧠 Spawned: {agent_name} ({role.value})")
+        self._broadcast_system(f"Spawned: {agent_name} ({role.value})")
         
         if task:
             asyncio.create_task(self._agent_task(agent, task))

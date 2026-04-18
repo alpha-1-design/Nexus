@@ -5,7 +5,7 @@
 No boilerplate. No cloud lock-in. No "works on my machine" surprises. Nexus runs on anything with Python 3.10+ — including that old laptop gathering dust, a cheap Android phone via Termux, or a $5/month VPS.
 
 ```bash
-git clone https://github.com/alpha-1-design/rehoboth-genesis.git && cd rehoboth-genesis
+git clone https://github.com/nexus-ai/nexus.git && cd nexus
 pip install -e .
 nexus repl
 ```
@@ -89,8 +89,8 @@ Nexus is designed to work well on Android via Termux.
 
 ```bash
 pkg install python git
-git clone https://github.com/alpha-1-design/rehoboth-genesis.git
-cd rehoboth-genesis
+git clone https://github.com/nexus-ai/nexus.git
+cd nexus
 pip install -e .
 nexus repl
 ```

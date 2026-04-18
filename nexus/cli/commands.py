@@ -1152,7 +1152,10 @@ def automation_install_browser(browser: str, with_deps: bool) -> None:
     
     click.echo(f"Installing {browser}...")
     import subprocess
-    cmd = ["/root/rehoboth-genesis/venv/bin/playwright", "install"]
+    venv_python = os.path.join(os.getcwd(), "venv", "bin", "playwright")
+    if not os.path.exists(venv_python):
+        venv_python = "playwright"
+    cmd = [venv_python, "install"]
     if with_deps:
         cmd.append("--with-deps")
     cmd.append(browser)

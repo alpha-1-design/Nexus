@@ -4,10 +4,14 @@ import os
 import sys
 import time
 import platform
-import psutil
 from pathlib import Path
 
-import psutil
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    psutil = None
+    PSUTIL_AVAILABLE = False
 
 try:
     from flask import Flask, jsonify, request
@@ -124,6 +128,11 @@ def create_app() -> "Flask":
 
 def _get_vitals() -> dict:
     vitals = {}
+    if not PSUTIL_AVAILABLE:
+        vitals["disk"] = "?"
+        vitals["cpu"] = "?"
+        vitals["memory"] = "?"
+        return vitals
     try:
         usage = psutil.disk_usage("/")
         vitals["disk"] = f"{usage.percent}%"
