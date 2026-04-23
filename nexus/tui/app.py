@@ -378,6 +378,10 @@ Agents: {len(state.active_agents)}
 
             turn = await orchestrator.run(user_input, stream_callback=stream_callback)
 
+            if turn.pending_approval:
+                self._handle_pending_approval(turn.pending_approval)
+                return
+
             if turn.assistant_message:
                 chat_panel.add_message(ChatMessage(
                     role=MessageRole.ASSISTANT,
@@ -398,6 +402,34 @@ Agents: {len(state.active_agents)}
 
         finally:
             self.state_manager.set_busy(False)
+
+    def _handle_pending_approval(self, approval: dict[str, Any]) -> None:
+        """Display a diff for user approval."""
+        result = approval.get("result", {})
+        diff = result.get("metadata", {}).get("diff", "No diff available")
+        path = result.get("metadata", {}).get("path", "Unknown")
+
+        diff_display = f"\n{'='*60}\nPROPOSED CHANGE: {path}\n{'='*60}\n{diff}"
+
+        chat_panel = self.query_one("#chat-panel", ChatPanel)
+
+        chat_panel.add_message(
+            ChatMessage(
+                role=MessageRole.SYSTEM,
+                content=diff_display,
+                timestamp=datetime.now(),
+            )
+        )
+
+        chat_panel.add_message(
+            ChatMessage(
+                role=MessageRole.SYSTEM,
+                content="\n[APPROVAL REQUIRED]\nType 'approve' to apply this change, or 'reject' to cancel.",
+                timestamp=datetime.now(),
+            )
+        )
+
+        self.state_manager.set_busy(False)
 
     def on_input_bar_command_entered(self, event: CommandEntered) -> None:
         """Handle command entered in input bar."""

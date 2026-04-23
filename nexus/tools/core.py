@@ -1,18 +1,17 @@
 """Core tools for Nexus - filesystem, shell, web, and more."""
 
 import asyncio
-import base64
-import glob as glob_module
 import os
-import re
-import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from .base import BaseTool, ToolDefinition, ToolResult, ToolRegistry
+from .diff_tool import InteractiveDiffTool
+
+from ..utils import sanitize_error
+from .base import BaseTool, ToolDefinition, ToolRegistry, ToolResult
 
 
 class ReadTool(BaseTool):
@@ -26,27 +25,35 @@ class ReadTool(BaseTool):
             input_schema={
                 "type": "object",
                 "properties": {
-                    "filePath": {"type": "string", "description": "Absolute path to the file to read"},
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to the file to read",
+                    },
                     "limit": {"type": "integer", "description": "Maximum number of lines to read"},
-                    "offset": {"type": "integer", "description": "Line number to start reading from (1-indexed)"},
+                    "offset": {
+                        "type": "integer",
+                        "description": "Line number to start reading from (1-indexed)",
+                    },
                 },
-                "required": ["filePath"],
+                "required": ["path"],
             },
             category="filesystem",
         )
 
-    async def execute(self, filePath: str, limit: int | None = None, offset: int | None = None, **kwargs) -> ToolResult:
+    async def execute(
+        self, path: str, limit: int | None = None, offset: int | None = None, **kwargs
+    ) -> ToolResult:
         try:
-            path = Path(filePath)
-            if not path.exists():
-                return ToolResult(success=False, content="", error=f"File not found: {filePath}")
+            file_path = Path(path)
+            if not file_path.exists():
+                return ToolResult(success=False, content="", error=f"File not found: {path}")
 
-            if not path.is_file():
-                return ToolResult(success=False, content="", error=f"Not a file: {filePath}")
+            if not file_path.is_file():
+                return ToolResult(success=False, content="", error=f"Not a file: {path}")
 
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
                 if offset:
-                    lines = f.readlines()[offset - 1:]
+                    lines = f.readlines()[offset - 1 :]
                 else:
                     lines = f.readlines()
 
@@ -57,7 +64,7 @@ class ReadTool(BaseTool):
 
             return ToolResult(success=True, content=content)
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
 
 class WriteTool(BaseTool):
@@ -71,80 +78,106 @@ class WriteTool(BaseTool):
             input_schema={
                 "type": "object",
                 "properties": {
-                    "filePath": {"type": "string", "description": "Path to the file to write"},
+                    "path": {"type": "string", "description": "Path to the file to write"},
                     "content": {"type": "string", "description": "Content to write to the file"},
                 },
-                "required": ["filePath", "content"],
+                "required": ["path", "content"],
             },
             requires_permission=True,
             category="filesystem",
         )
 
-    async def execute(self, filePath: str, content: str, **kwargs) -> ToolResult:
+    async def execute(self, path: str, content: str, **kwargs) -> ToolResult:
         try:
-            path = Path(filePath)
-            path.parent.mkdir(parents=True, exist_ok=True)
+            file_path = Path(path)
+            file_path.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(path, "w", encoding="utf-8") as f:
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
 
             return ToolResult(
                 success=True,
-                content=f"File written successfully: {filePath}",
+                content=f"File written successfully: {path}",
                 metadata={"bytes_written": len(content.encode("utf-8"))},
             )
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
 
 class EditTool(BaseTool):
-    """Edit a file by replacing exact text."""
+    """Edit a file by replacing exact text with context verification."""
 
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="edit",
-            description="Edit a file by replacing exact text. The oldString must match the file content exactly including all whitespace.",
+            description="Edit a file by replacing exact text. Use 'before' and 'after' context strings to ensure the correct location is modified and to handle duplicate text in the file.",
             input_schema={
                 "type": "object",
                 "properties": {
-                    "filePath": {"type": "string", "description": "Path to the file to edit"},
-                    "oldString": {"type": "string", "description": "Exact text to replace (must match exactly)"},
-                    "newString": {"type": "string", "description": "Replacement text"},
+                    "path": {"type": "string", "description": "Path to the file to edit"},
+                    "old_string": {
+                        "type": "string",
+                        "description": "Exact text to replace",
+                    },
+                    "new_string": {"type": "string", "description": "Replacement text"},
+                    "before": {
+                        "type": "string",
+                        "description": "Text immediately preceding old_string for context",
+                    },
+                    "after": {
+                        "type": "string",
+                        "description": "Text immediately following old_string for context",
+                    },
                 },
-                "required": ["filePath", "oldString", "newString"],
+                "required": ["path", "old_string", "new_string"],
             },
             requires_permission=True,
             category="filesystem",
         )
 
-    async def execute(self, filePath: str, oldString: str, newString: str, **kwargs) -> ToolResult:
+    async def execute(self, path: str, old_string: str, new_string: str, before: str = "", after: str = "", **kwargs) -> ToolResult:
         try:
-            path = Path(filePath)
-            if not path.exists():
-                return ToolResult(success=False, content="", error=f"File not found: {filePath}")
+            file_path = Path(path)
+            if not file_path.exists():
+                return ToolResult(success=False, content="", error=f"File not found: {path}")
 
-            with open(path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 content = f.read()
 
-            if oldString not in content:
+            full_old_text = before + old_string + after
+            
+            if full_old_text not in content:
+                # Provide helpful debugging info if match fails
+                if old_string not in content:
+                    return ToolResult(success=False, content="", error=f"Target text 'old_string' not found in {path}.")
                 return ToolResult(
                     success=False,
                     content="",
-                    error=f"Text not found in file. The oldString must match exactly.",
+                    error=f"Context mismatch. 'old_string' was found, but the surrounding 'before' or 'after' context did not match exactly.",
                 )
 
-            new_content = content.replace(oldString, newString, 1)
+            # Check for multiple occurrences of the full context block
+            count = content.count(full_old_text)
+            if count > 1:
+                return ToolResult(
+                    success=False,
+                    content="",
+                    error=f"Ambiguous edit: found {count} occurrences of the provided context block. Please provide more 'before' or 'after' context.",
+                )
 
-            with open(path, "w", encoding="utf-8") as f:
+            new_full_text = before + new_string + after
+            new_content = content.replace(full_old_text, new_full_text, 1)
+
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
             return ToolResult(
                 success=True,
-                content=f"Edit applied successfully to {filePath}",
+                content=f"Edit applied successfully to {path}",
             )
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
 
 class GlobTool(BaseTool):
@@ -158,8 +191,14 @@ class GlobTool(BaseTool):
             input_schema={
                 "type": "object",
                 "properties": {
-                    "pattern": {"type": "string", "description": "Glob pattern to match (e.g., '**/*.py', 'src/**/*.ts')"},
-                    "path": {"type": "string", "description": "Directory to search in (defaults to current directory)"},
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern to match (e.g., '**/*.py', 'src/**/*.ts')",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Directory to search in (defaults to current directory)",
+                    },
                 },
                 "required": ["pattern"],
             },
@@ -182,7 +221,7 @@ class GlobTool(BaseTool):
                 metadata={"files": paths},
             )
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
 
 class GrepTool(BaseTool):
@@ -196,10 +235,20 @@ class GrepTool(BaseTool):
             input_schema={
                 "type": "object",
                 "properties": {
-                    "pattern": {"type": "string", "description": "Regular expression pattern to search for"},
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regular expression pattern to search for",
+                    },
                     "path": {"type": "string", "description": "Directory or file to search in"},
-                    "include": {"type": "string", "description": "Only search in files matching this pattern (e.g., '*.py')"},
-                    "outputMode": {"type": "string", "enum": ["content", "files_with_matches", "count"], "description": "Output format"},
+                    "include": {
+                        "type": "string",
+                        "description": "Only search in files matching this pattern (e.g., '*.py')",
+                    },
+                    "outputMode": {
+                        "type": "string",
+                        "enum": ["content", "files_with_matches", "count"],
+                        "description": "Output format",
+                    },
                     "case_sensitive": {"type": "boolean", "description": "Case sensitive search"},
                 },
                 "required": ["pattern"],
@@ -212,21 +261,20 @@ class GrepTool(BaseTool):
         pattern: str,
         path: str | None = None,
         include: str | None = None,
-        outputMode: str = "content",
+        output_mode: str = "content",
         case_sensitive: bool = True,
         **kwargs,
     ) -> ToolResult:
         try:
             search_path = Path(path) if path else Path.cwd()
-            flags = 0 if case_sensitive else re.IGNORECASE
 
             cmd = ["rg", "--json"]
             if not case_sensitive:
                 cmd.append("-i")
 
-            if outputMode == "count":
+            if output_mode == "count":
                 cmd.extend(["-c"])
-            elif outputMode == "files_with_matches":
+            elif output_mode == "files_with_matches":
                 cmd.append("-l")
 
             if include:
@@ -247,7 +295,7 @@ class GrepTool(BaseTool):
             if result.returncode != 0:
                 return ToolResult(success=False, content="", error=result.stderr)
 
-            if outputMode == "files_with_matches":
+            if output_mode == "files_with_matches":
                 files = [line.split(":")[0] for line in result.stdout.strip().split("\n") if line]
                 return ToolResult(
                     success=True,
@@ -255,7 +303,7 @@ class GrepTool(BaseTool):
                     metadata={"files": list(set(files))},
                 )
 
-            if outputMode == "count":
+            if output_mode == "count":
                 return ToolResult(success=True, content=result.stdout)
 
             return ToolResult(success=True, content=result.stdout)
@@ -266,7 +314,7 @@ class GrepTool(BaseTool):
                 error="ripgrep (rg) not found. Install with: pip install ripgrep",
             )
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
 
 class ListTool(BaseTool):
@@ -280,7 +328,10 @@ class ListTool(BaseTool):
             input_schema={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Path to list (defaults to current directory)"},
+                    "path": {
+                        "type": "string",
+                        "description": "Path to list (defaults to current directory)",
+                    },
                 },
             },
             category="filesystem",
@@ -295,7 +346,7 @@ class ListTool(BaseTool):
 
             items = []
             for item in sorted(list_path.iterdir()):
-                icon = "📁" if item.is_dir() else "📄"
+                icon = "[dir]" if item.is_dir() else "[file]"
                 items.append(f"{icon} {item.name}")
 
             if not items:
@@ -307,7 +358,7 @@ class ListTool(BaseTool):
                 metadata={"path": str(list_path.absolute())},
             )
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
 
 class BashTool(BaseTool):
@@ -322,9 +373,18 @@ class BashTool(BaseTool):
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "Shell command to execute"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default: 30)"},
-                    "workdir": {"type": "string", "description": "Working directory for the command"},
-                    "description": {"type": "string", "description": "Description of what this command does"},
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds (default: 30)",
+                    },
+                    "workdir": {
+                        "type": "string",
+                        "description": "Working directory for the command",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Description of what this command does",
+                    },
                 },
                 "required": ["command"],
             },
@@ -387,7 +447,7 @@ class BashTool(BaseTool):
                 },
             )
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
 
 class WebFetchTool(BaseTool):
@@ -403,7 +463,11 @@ class WebFetchTool(BaseTool):
                 "properties": {
                     "url": {"type": "string", "description": "URL to fetch"},
                     "headers": {"type": "object", "description": "HTTP headers to include"},
-                    "method": {"type": "string", "description": "HTTP method (GET, POST, etc.)", "default": "GET"},
+                    "method": {
+                        "type": "string",
+                        "description": "HTTP method (GET, POST, etc.)",
+                        "default": "GET",
+                    },
                     "body": {"type": "string", "description": "Request body for POST requests"},
                 },
                 "required": ["url"],
@@ -445,7 +509,7 @@ class WebFetchTool(BaseTool):
                     },
                 )
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
 
 class WebSearchTool(BaseTool):
@@ -460,7 +524,11 @@ class WebSearchTool(BaseTool):
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query"},
-                    "numResults": {"type": "integer", "description": "Number of results to return", "default": 8},
+                    "numResults": {
+                        "type": "integer",
+                        "description": "Number of results to return",
+                        "default": 8,
+                    },
                 },
                 "required": ["query"],
             },
@@ -470,23 +538,24 @@ class WebSearchTool(BaseTool):
     async def execute(
         self,
         query: str,
-        numResults: int = 8,
+        num_results: int = 8,
         **kwargs,
     ) -> ToolResult:
         try:
             from ..config import load_config
+
             config = load_config()
 
             if config.search_provider == "tavily" and config.tavily_api_key:
-                return await self._search_tavily(query, numResults, config.tavily_api_key)
+                return await self._search_tavily(query, num_results, config.tavily_api_key)
             elif config.search_provider == "brave" and config.brave_api_key:
-                return await self._search_brave(query, numResults, config.brave_api_key)
+                return await self._search_brave(query, num_results, config.brave_api_key)
             elif config.search_provider == "exa":
-                return await self._search_exa(query, numResults, config.exa_api_key)
+                return await self._search_exa(query, num_results, config.exa_api_key)
             else:
-                return await self._search_duckduckgo(query, numResults)
+                return await self._search_duckduckgo(query, num_results)
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
     async def _search_exa(self, query: str, num: int, api_key: str | None) -> ToolResult:
         try:
@@ -506,14 +575,16 @@ class WebSearchTool(BaseTool):
 
                 results = []
                 for item in data.get("results", []):
-                    results.append(f"## {item.get('title', 'Untitled')}\n{item.get('url', '')}\n{item.get('snippet', '')}\n")
+                    results.append(
+                        f"## {item.get('title', 'Untitled')}\n{item.get('url', '')}\n{item.get('snippet', '')}\n"
+                    )
 
                 return ToolResult(
                     success=True,
                     content="\n---\n".join(results) if results else "No results found.",
                     metadata={"provider": "exa"},
                 )
-        except Exception as e:
+        except Exception:
             return await self._search_duckduckgo(query, num)
 
     async def _search_tavily(self, query: str, num: int, api_key: str) -> ToolResult:
@@ -534,7 +605,9 @@ class WebSearchTool(BaseTool):
 
                 results = []
                 for item in data.get("results", []):
-                    results.append(f"## {item.get('title', 'Untitled')}\n{item.get('url', '')}\n{item.get('content', '')}\n")
+                    results.append(
+                        f"## {item.get('title', 'Untitled')}\n{item.get('url', '')}\n{item.get('content', '')}\n"
+                    )
 
                 return ToolResult(
                     success=True,
@@ -558,7 +631,9 @@ class WebSearchTool(BaseTool):
 
                 results = []
                 for item in data.get("web", {}).get("results", []):
-                    results.append(f"## {item.get('title', 'Untitled')}\n{item.get('url', '')}\n{item.get('description', '')}\n")
+                    results.append(
+                        f"## {item.get('title', 'Untitled')}\n{item.get('url', '')}\n{item.get('description', '')}\n"
+                    )
 
                 return ToolResult(
                     success=True,
@@ -570,13 +645,22 @@ class WebSearchTool(BaseTool):
 
     async def _search_duckduckgo(self, query: str, num: int) -> ToolResult:
         try:
-            from duckduckgo_search import DDGS
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=num))
+            try:
+                from ddgs import DDGS
+                with DDGS() as ddgs:
+                    results = list(ddgs.text(query, max_results=num))
+            except ImportError:
+                import warnings
+                warnings.filterwarnings("ignore", message=".*duckduckgo_search.*")
+                from duckduckgo_search import DDGS
+                with DDGS() as ddgs:
+                    results = list(ddgs.text(query, max_results=num))
 
             output = []
             for item in results:
-                output.append(f"## {item.get('title', 'Untitled')}\n{item.get('href', '')}\n{item.get('body', '')}\n")
+                output.append(
+                    f"## {item.get('title', 'Untitled')}\n{item.get('href', '')}\n{item.get('body', '')}\n"
+                )
 
             return ToolResult(
                 success=True,
@@ -590,7 +674,7 @@ class WebSearchTool(BaseTool):
                 error="No search provider configured. Install duckduckgo-search: pip install duckduckgo-search",
             )
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
 
 class TodoWriteTool(BaseTool):
@@ -611,7 +695,10 @@ class TodoWriteTool(BaseTool):
                             "type": "object",
                             "properties": {
                                 "content": {"type": "string", "description": "Todo description"},
-                                "status": {"type": "string", "enum": ["in_progress", "pending", "completed", "cancelled"]},
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["in_progress", "pending", "completed", "cancelled"],
+                                },
                                 "priority": {"type": "string", "enum": ["high", "medium", "low"]},
                             },
                         },
@@ -624,17 +711,18 @@ class TodoWriteTool(BaseTool):
     async def execute(self, todos: list[dict[str, Any]], **kwargs) -> ToolResult:
         try:
             from ..memory import get_memory
+
             memory = get_memory()
             memory.save_todos(todos)
 
             output = []
             for todo in todos:
                 status_icon = {
-                    "in_progress": "🔄",
-                    "pending": "⏳",
-                    "completed": "✅",
-                    "cancelled": "❌",
-                }.get(todo.get("status", "pending"), "•")
+                    "in_progress": "[*]",
+                    "pending": "[.]",
+                    "completed": "[x]",
+                    "cancelled": "[-]",
+                }.get(todo.get("status", "pending"), "[*]")
                 priority = todo.get("priority", "medium")
                 output.append(f"{status_icon} [{priority.upper()}] {todo.get('content', '')}")
 
@@ -644,7 +732,7 @@ class TodoWriteTool(BaseTool):
                 metadata={"count": len(todos)},
             )
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
 
 class QuestionTool(BaseTool):
@@ -705,16 +793,21 @@ class CodeSearchTool(BaseTool):
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Code search query"},
-                    "tokensNum": {"type": "integer", "description": "Number of tokens to return (1000-50000)", "default": 5000},
+                    "tokensNum": {
+                        "type": "integer",
+                        "description": "Number of tokens to return (1000-50000)",
+                        "default": 5000,
+                    },
                 },
                 "required": ["query"],
             },
             category="web",
         )
 
-    async def execute(self, query: str, tokensNum: int = 5000, **kwargs) -> ToolResult:
+    async def execute(self, query: str, tokens_num: int = 5000, **kwargs) -> ToolResult:
         try:
             from ..config import load_config
+
             config = load_config()
 
             if not config.exa_api_key:
@@ -741,7 +834,9 @@ class CodeSearchTool(BaseTool):
 
                 results = []
                 for item in data.get("results", []):
-                    results.append(f"## {item.get('title', 'Untitled')}\n{item.get('url', '')}\n{item.get('snippet', '')}\n")
+                    results.append(
+                        f"## {item.get('title', 'Untitled')}\n{item.get('url', '')}\n{item.get('snippet', '')}\n"
+                    )
 
                 return ToolResult(
                     success=True,
@@ -749,7 +844,7 @@ class CodeSearchTool(BaseTool):
                     metadata={"provider": "exa"},
                 )
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
 
 class GitTool(BaseTool):
@@ -763,8 +858,14 @@ class GitTool(BaseTool):
             input_schema={
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "Git command to run (e.g., 'status', 'diff', 'log --oneline -10')"},
-                    "workdir": {"type": "string", "description": "Working directory (defaults to current directory)"},
+                    "command": {
+                        "type": "string",
+                        "description": "Git command to run (e.g., 'status', 'diff', 'log --oneline -10')",
+                    },
+                    "workdir": {
+                        "type": "string",
+                        "description": "Working directory (defaults to current directory)",
+                    },
                 },
                 "required": ["command"],
             },
@@ -774,7 +875,7 @@ class GitTool(BaseTool):
     async def execute(self, command: str, workdir: str | None = None, **kwargs) -> ToolResult:
         try:
             cwd = workdir if workdir else os.getcwd()
-            
+
             full_command = f"git {command}"
 
             result = subprocess.run(
@@ -793,7 +894,7 @@ class GitTool(BaseTool):
                 metadata={"exit_code": result.returncode, "command": full_command},
             )
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
 
 class ClipboardTool(BaseTool):
@@ -807,8 +908,15 @@ class ClipboardTool(BaseTool):
             input_schema={
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["read", "write"], "description": "Read from or write to clipboard"},
-                    "text": {"type": "string", "description": "Text to write to clipboard (required for write action)"},
+                    "action": {
+                        "type": "string",
+                        "enum": ["read", "write"],
+                        "description": "Read from or write to clipboard",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Text to write to clipboard (required for write action)",
+                    },
                 },
                 "required": ["action"],
             },
@@ -863,24 +971,35 @@ class ClipboardTool(BaseTool):
                 error="Clipboard tools not available. Install termux-api or xclip.",
             )
         except Exception as e:
-            return ToolResult(success=False, content="", error=str(e))
+            return ToolResult(success=False, content="", error=sanitize_error(e))
 
 
 def register_all(registry: ToolRegistry) -> None:
     """Register all core tools."""
+    from nexus.automation.tools import (
+        ApiFetchTool,
+        ApiPostTool,
+        ApiUploadTool,
+        BrowserClickTool,
+        BrowserCloseTool,
+        BrowserFillFormTool,
+        BrowserGetContentTool,
+        BrowserNavigateTool,
+        BrowserScreenshotTool,
+        BrowserScrollTool,
+        BrowserSolveCaptchaTool,
+        BrowserSubmitFormTool,
+        BrowserTypeTool,
+        ExtractFormsTool,
+    )
     from nexus.termux.clipboard import ClipboardTool as TermuxClipboardTool
     from nexus.termux.notifications import NotificationTool as TermuxNotificationTool
-    from nexus.automation.tools import (
-        BrowserNavigateTool, BrowserFillFormTool, BrowserClickTool,
-        BrowserScreenshotTool, BrowserGetContentTool, BrowserSubmitFormTool,
-        BrowserTypeTool, BrowserScrollTool, BrowserCloseTool, BrowserSolveCaptchaTool,
-        ApiFetchTool, ApiPostTool, ExtractFormsTool, ApiUploadTool,
-    )
-    
+
     tools = [
         ReadTool(),
         WriteTool(),
         EditTool(),
+        InteractiveDiffTool(),
         GlobTool(),
         GrepTool(),
         ListTool(),

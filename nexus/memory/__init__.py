@@ -227,3 +227,133 @@ def reset_memory() -> None:
     """Reset the global memory instance."""
     global _memory
     _memory = None
+
+
+class ProjectIndexer:
+    """Indexes project structure for semantic understanding."""
+
+    IGNORE_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".ruff_cache"}
+    IGNORE_EXTS = {".pyc", ".pyo", ".so", ".egg", ".whl"}
+
+    def __init__(self, memory: Memory | None = None):
+        self.memory = memory or get_memory()
+        self._index: dict[str, dict[str, Any]] = {}
+
+    def index_project(self, root_path: str | None = None) -> dict[str, Any]:
+        """Index a project directory for semantic understanding."""
+        import os
+
+        root = root_path or os.getcwd()
+        if not os.path.isdir(root):
+            return {"error": f"Directory not found: {root}"}
+
+        project_info = {
+            "root": root,
+            "language": None,
+            "files": [],
+            "imports": [],
+            "structure": {},
+        }
+
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in self.IGNORE_DIRS]
+
+            for filename in filenames:
+                ext = os.path.splitext(filename)[1]
+                if ext in self.IGNORE_EXTS:
+                    continue
+
+                file_path = os.path.join(dirpath, filename)
+                file_info = {
+                    "path": os.path.relpath(file_path, root),
+                    "type": ext.lstrip("."),
+                    "size": os.path.getsize(file_path),
+                }
+                project_info["files"].append(file_info)
+
+                if ext == ".py":
+                    if project_info["language"] is None:
+                        project_info["language"] = "python"
+                    try:
+                        with open(file_path) as f:
+                            content = f.read()
+                            imports = self._extract_python_imports(content)
+                            project_info["imports"].extend(imports)
+                    except Exception:
+                        pass
+
+        project_info["file_count"] = len(project_info["files"])
+        project_info["import_count"] = len(project_info["imports"])
+
+        self._index = project_info
+        return project_info
+
+    def _extract_python_imports(self, content: str) -> list[str]:
+        """Extract imports from Python file."""
+        imports = []
+        for line in content.split("\n"):
+            line = line.strip()
+            if line.startswith(("import ", "from ")):
+                imports.append(line)
+        return imports
+
+    def get_summary(self) -> str:
+        """Get a human-readable project summary."""
+        if not self._index:
+            return "No project indexed yet."
+
+        parts = []
+        if self._index.get("language"):
+            parts.append(f"Language: {self._index['language']}")
+        if self._index.get("file_count"):
+            parts.append(f"Files: {self._index['file_count']}")
+        if self._index.get("import_count"):
+            parts.append(f"Imports: {self._index['import_count']}")
+
+        return ", ".join(parts) if parts else "Empty project"
+
+    def audit_dependencies(self, root_path: str | None = None) -> dict[str, Any]:
+        """Audit project dependencies for security and updates."""
+        import json
+        import os
+
+        root = root_path or self._index.get("root", os.getcwd())
+        audit = {
+            "root": root,
+            "python": {"file": None, "packages": []},
+            "js": {"file": None, "packages": []},
+            "security_issues": [],
+        }
+
+        pyproject = os.path.join(root, "pyproject.toml")
+        if os.path.exists(pyproject):
+            audit["python"]["file"] = pyproject
+            try:
+                import toml
+                with open(pyproject) as f:
+                    data = toml.loads(f.read())
+                    deps = data.get("project", {}).get("dependencies", [])
+                    audit["python"]["packages"] = deps
+            except Exception:
+                pass
+
+        req_txt = os.path.join(root, "requirements.txt")
+        if os.path.exists(req_txt):
+            audit["python"]["file"] = req_txt
+            with open(req_txt) as f:
+                audit["python"]["packages"] = [
+                    line.strip() for line in f if line.strip() and not line.startswith("#")
+                ]
+
+        pkg_json = os.path.join(root, "package.json")
+        if os.path.exists(pkg_json):
+            audit["js"]["file"] = pkg_json
+            try:
+                with open(pkg_json) as f:
+                    data = json.load(f)
+                    deps = data.get("dependencies", {})
+                    audit["js"]["packages"] = list(deps.keys())
+            except Exception:
+                pass
+
+        return audit

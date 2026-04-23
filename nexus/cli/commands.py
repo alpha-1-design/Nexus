@@ -2,17 +2,15 @@
 
 import asyncio
 import os
-import sys
 from pathlib import Path
-from typing import Any
 
 import click
 
-from .. import __version__
-from ..config import NexusConfig, ProviderConfig, load_config, save_config
-from ..providers import get_manager
-from ..providers.base import Message
-from ..tools import get_registry
+from nexus import __version__
+from nexus.config import NexusConfig, ProviderConfig, load_config, save_config
+from nexus.providers import get_manager
+from nexus.providers.base import Message
+from nexus.tools import get_registry
 
 
 @click.group()
@@ -21,7 +19,7 @@ from ..tools import get_registry
 @click.pass_context
 def cli(ctx: click.Context, config: str | None) -> None:
     """Nexus - Your AI Coding Agent.
-    
+
     A powerful, self-hosted AI coding agent that combines the best features
     of OpenClaw, Claude Code, Gemini CLI, OpenCode, and NemoClaw.
     """
@@ -44,8 +42,8 @@ def provider():
 def provider_list(ctx: click.Context) -> None:
     """List all configured providers."""
     config: NexusConfig = ctx.obj["config"]
-    manager = get_manager()
-    
+    get_manager()
+
     click.echo("Configured providers:\n")
     for name, cfg in config.providers.items():
         status = "active" if name == config.active_provider else "inactive"
@@ -56,15 +54,27 @@ def provider_list(ctx: click.Context) -> None:
 
 @provider.command("add")
 @click.argument("name")
-@click.option("--type", "provider_type", required=True, help="Provider type (openai, anthropic, google, ollama, groq, deepseek)")
+@click.option(
+    "--type",
+    "provider_type",
+    required=True,
+    help="Provider type (openai, anthropic, google, ollama, groq, deepseek)",
+)
 @click.option("--api-key", help="API key")
 @click.option("--base-url", help="Base URL (for custom endpoints)")
 @click.option("--model", default="gpt-4o", help="Default model")
 @click.pass_context
-def provider_add(ctx: click.Context, name: str, provider_type: str, api_key: str | None, base_url: str | None, model: str) -> None:
+def provider_add(
+    ctx: click.Context,
+    name: str,
+    provider_type: str,
+    api_key: str | None,
+    base_url: str | None,
+    model: str,
+) -> None:
     """Add a new AI provider."""
     config: NexusConfig = ctx.obj["config"]
-    
+
     config.providers[name] = ProviderConfig(
         name=name,
         provider_type=provider_type,
@@ -72,7 +82,7 @@ def provider_add(ctx: click.Context, name: str, provider_type: str, api_key: str
         base_url=base_url,
         model=model,
     )
-    
+
     save_config(config)
     click.echo(f"Added provider: {name}")
 
@@ -83,7 +93,7 @@ def provider_add(ctx: click.Context, name: str, provider_type: str, api_key: str
 def provider_remove(ctx: click.Context, name: str) -> None:
     """Remove a provider."""
     config: NexusConfig = ctx.obj["config"]
-    
+
     if name in config.providers:
         del config.providers[name]
         save_config(config)
@@ -98,17 +108,17 @@ def provider_remove(ctx: click.Context, name: str) -> None:
 def provider_set_active(ctx: click.Context, name: str) -> None:
     """Set the active provider."""
     config: NexusConfig = ctx.obj["config"]
-    
+
     if name not in config.providers:
         click.echo(f"Provider not found: {name}", err=True)
         return
-    
+
     config.active_provider = name
     save_config(config)
-    
+
     manager = get_manager()
     manager.set_active(name)
-    
+
     click.echo(f"Active provider set to: {name}")
 
 
@@ -124,11 +134,12 @@ def model():
 @click.pass_context
 def model_list(ctx: click.Context, provider: str | None) -> None:
     """List available models."""
+
     async def run():
         manager = get_manager()
         try:
             models = await manager.list_models(provider)
-            click.echo(f"Available models:\n")
+            click.echo("Available models:\n")
             for m in models:
                 click.echo(f"  {m.id}")
                 click.echo(f"    Provider: {m.provider}")
@@ -147,6 +158,7 @@ def model_list(ctx: click.Context, provider: str | None) -> None:
 @click.pass_context
 def model_set(ctx: click.Context, model: str, provider: str | None) -> None:
     """Set the model for a provider."""
+
     async def run():
         manager = get_manager()
         try:
@@ -172,7 +184,7 @@ def tool():
 def tool_list(ctx: click.Context, category: str | None) -> None:
     """List available tools."""
     registry = get_registry()
-    
+
     if category:
         tools = registry.list_by_category(category)
         click.echo(f"Tools in '{category}':\n")
@@ -200,15 +212,15 @@ def session():
 def session_list(ctx: click.Context, limit: int) -> None:
     """List recent sessions."""
     from ..memory import get_memory
-    
+
     memory = get_memory()
     sessions = memory.list_sessions(limit)
-    
+
     if not sessions:
         click.echo("No sessions found.")
         return
-    
-    click.echo(f"Recent sessions:\n")
+
+    click.echo("Recent sessions:\n")
     for s in sessions:
         date = s.created_at.strftime("%Y-%m-%d %H:%M")
         outcome = s.outcome or "in progress"
@@ -221,14 +233,14 @@ def session_list(ctx: click.Context, limit: int) -> None:
 def session_show(ctx: click.Context, session_id: str) -> None:
     """Show a session's details."""
     from ..memory import get_memory
-    
+
     memory = get_memory()
     session = memory.load_session(session_id)
-    
+
     if not session:
         click.echo(f"Session not found: {session_id}", err=True)
         return
-    
+
     click.echo(f"Session: {session.id}\n")
     click.echo(f"Created: {session.created_at}")
     click.echo(f"Updated: {session.updated_at}")
@@ -249,6 +261,7 @@ def sync():
 def sync_status() -> None:
     """Show sync status."""
     from ..sync import get_sync_engine
+
     engine = get_sync_engine()
     print(engine.format_status())
 
@@ -259,25 +272,29 @@ def sync_status() -> None:
 @click.option("--token", help="API token (GitHub)")
 @click.option("--path", type=click.Path(), help="Local path or git remote URL")
 @click.option("--url", help="Service URL")
-def sync_connect(target_type: str, name: str | None, token: str | None, path: str | None, url: str | None) -> None:
+def sync_connect(
+    target_type: str, name: str | None, token: str | None, path: str | None, url: str | None
+) -> None:
     """Connect a sync target (github-gist, local, git)."""
-    from ..sync import get_sync_engine, SyncEndpoint, SyncTarget
-    
+    from ..sync import SyncEndpoint, SyncTarget, get_sync_engine
+
     target_map = {
         "github-gist": SyncTarget.GITHUB_GIST,
         "github": SyncTarget.GITHUB_GIST,
         "local": SyncTarget.LOCAL,
         "git": SyncTarget.GIT_REMOTE,
     }
-    
+
     target = target_map.get(target_type.lower())
     if not target:
-        click.echo(f"Unknown target type: {target_type}. Valid: {', '.join(target_map.keys())}", err=True)
+        click.echo(
+            f"Unknown target type: {target_type}. Valid: {', '.join(target_map.keys())}", err=True
+        )
         return
-    
+
     engine = get_sync_engine()
     endpoint_name = name or f"{target_type}-{target.value}"
-    
+
     endpoint = SyncEndpoint(
         name=endpoint_name,
         target=target,
@@ -285,7 +302,7 @@ def sync_connect(target_type: str, name: str | None, token: str | None, path: st
         path=Path(path) if path else None,
         url=url,
     )
-    
+
     if engine.connect(endpoint):
         click.echo(f"Connected: {endpoint_name} ({target.name})")
     else:
@@ -298,10 +315,10 @@ def sync_connect(target_type: str, name: str | None, token: str | None, path: st
 def sync_push(endpoint_name: str, session: str | None) -> None:
     """Push sessions to sync endpoint."""
     from ..sync import get_sync_engine
-    
+
     engine = get_sync_engine()
     result = engine.push(endpoint_name, session)
-    
+
     if result.get("success"):
         click.echo(f"Pushed: {result.get('items', 0)} item(s)")
         if result.get("gist_url"):
@@ -316,10 +333,10 @@ def sync_push(endpoint_name: str, session: str | None) -> None:
 def sync_pull(endpoint_name: str, session: str | None) -> None:
     """Pull sessions from sync endpoint."""
     from ..sync import get_sync_engine
-    
+
     engine = get_sync_engine()
     result = engine.pull(endpoint_name, session)
-    
+
     if result.get("success"):
         click.echo(f"Pulled: {result.get('items', 0)} item(s)")
         if result.get("conflicts"):
@@ -333,7 +350,7 @@ def sync_pull(endpoint_name: str, session: str | None) -> None:
 def sync_disconnect(endpoint_name: str) -> None:
     """Disconnect a sync endpoint."""
     from ..sync import get_sync_engine
-    
+
     engine = get_sync_engine()
     if engine.disconnect(endpoint_name):
         click.echo(f"Disconnected: {endpoint_name}")
@@ -352,7 +369,7 @@ def learn():
 def learn_stats() -> None:
     """Show learning statistics."""
     from ..learn import get_learning_engine
-    
+
     engine = get_learning_engine()
     print(engine.format_summary())
 
@@ -362,20 +379,20 @@ def learn_stats() -> None:
 def learn_lessons(show: int) -> None:
     """Show recent lessons."""
     from ..learn import get_learning_engine
-    
+
     engine = get_learning_engine()
     lessons = engine._load_all_lessons()[:show]
-    
+
     if not lessons:
         click.echo("No lessons yet. Keep working!")
         return
-    
-    for l in lessons:
-        rate = l.success_count / max(1, l.success_count + l.failure_count)
-        click.echo(f"\n  [{l.lesson_id}] {l.title}")
-        click.echo(f"    {l.summary[:100]}...")
-        click.echo(f"    Success rate: {rate:.0%} ({l.success_count} ok / {l.failure_count} fail)")
-        for tc in l.trigger_conditions[:3]:
+
+    for lesson in lessons:
+        rate = lesson.success_count / max(1, lesson.success_count + lesson.failure_count)
+        click.echo(f"\n  [{lesson.lesson_id}] {lesson.title}")
+        click.echo(f"    {lesson.summary[:100]}...")
+        click.echo(f"    Success rate: {rate:.0%} ({lesson.success_count} ok / {lesson.failure_count} fail)")
+        for tc in lesson.trigger_conditions[:3]:
             click.echo(f"    Trigger: {tc}")
 
 
@@ -383,20 +400,21 @@ def learn_lessons(show: int) -> None:
 @click.option("--limit", default=10, help="Number of failures to show")
 def learn_failures(limit: int) -> None:
     """Show recent failure records."""
-    from ..learn import get_learning_engine
     import json
-    
+
+    from ..learn import get_learning_engine
+
     engine = get_learning_engine()
     failures = sorted(
         engine.failures_dir.glob("*.json"),
         key=lambda f: f.stat().st_mtime,
         reverse=True,
     )[:limit]
-    
+
     if not failures:
         click.echo("No failures recorded.")
         return
-    
+
     for f in failures:
         data = json.loads(f.read_text())
         date = data["timestamp"][:16]
@@ -410,18 +428,18 @@ def learn_failures(limit: int) -> None:
 @click.confirmation_option(prompt="Clear all failure records and lessons?")
 def learn_clear() -> None:
     """Clear all learning data."""
+
     from ..learn import get_learning_engine
-    import shutil
-    
+
     engine = get_learning_engine()
-    
+
     for d in [engine.failures_dir, engine.lessons_dir, engine.patterns_dir]:
         if d.exists():
             for f in d.glob("*.json"):
                 f.unlink()
             for f in d.glob("*.md"):
                 f.unlink()
-    
+
     click.echo("Learning data cleared.")
 
 
@@ -437,14 +455,14 @@ def memory():
 def memory_facts(ctx: click.Context) -> None:
     """Show stored facts."""
     from ..memory import get_memory
-    
+
     memory = get_memory()
     facts = memory.get_all_facts()
-    
+
     if not facts:
         click.echo("No facts stored.")
         return
-    
+
     click.echo("Stored facts:\n")
     for key, value in facts.items():
         click.echo(f"  {key}: {value}")
@@ -458,7 +476,7 @@ def memory_facts(ctx: click.Context) -> None:
 def memory_add_fact(ctx: click.Context, key: str, value: str, category: str) -> None:
     """Add a fact to memory."""
     from ..memory import get_memory
-    
+
     memory = get_memory()
     memory.add_fact(key, value, category)
     click.echo(f"Added fact: {key} = {value}")
@@ -477,6 +495,7 @@ def config_show(ctx: click.Context) -> None:
     """Show current configuration."""
     cfg: NexusConfig = ctx.obj["config"]
     import json
+
     click.echo(json.dumps(cfg.to_dict(), indent=2, default=str))
 
 
@@ -487,7 +506,7 @@ def config_show(ctx: click.Context) -> None:
 def config_set(ctx: click.Context, key: str, value: str) -> None:
     """Set a configuration value."""
     config: NexusConfig = ctx.obj["config"]
-    
+
     # Handle nested keys like 'providers.openai.model'
     if "." in key:
         parts = key.split(".")
@@ -501,7 +520,7 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     else:
         setattr(config, key, value)
         save_config(config)
-    
+
     click.echo(f"Set {key} = {value}")
 
 
@@ -514,7 +533,12 @@ OPENCODE_ZEN_FREE_MODELS = [
 ]
 
 PROVIDER_OPTIONS = [
-    ("opencode-zen", "OpenCode Zen", "Recommended", "Best free models, no key needed for free tier"),
+    (
+        "opencode-zen",
+        "OpenCode Zen",
+        "Recommended",
+        "Best free models, no key needed for free tier",
+    ),
     ("opencode-go", "OpenCode Go", "Premium", "Kimi K2.5, GLM 5, MiniMax M2.7 (paid)"),
     ("groq", "Groq", "Free tier", "Llama-3.3-70B, Mixtral — fast inference"),
     ("openrouter", "OpenRouter", "100+ models", "Access to dozens of providers, has free models"),
@@ -550,12 +574,12 @@ def setup_cmd(
     non_interactive: bool,
 ) -> None:
     """Interactive setup wizard — configure your AI provider in seconds.
-    
+
     Guides you through selecting a provider, model, and API key.
     OpenCode Zen is recommended for zero-cost setup.
-    
+
     Examples:
-    
+
         nexus setup                     Interactive wizard
         nexus setup --non-interactive   Use env vars or defaults
         nexus setup --provider groq      Quick setup for a specific provider
@@ -563,10 +587,9 @@ def setup_cmd(
     config: NexusConfig = ctx.obj["config"]
 
     # Auto-detect Termux
-    is_termux = (
-        os.path.exists("/data/data/com.termux/files/usr/bin/termux-audio")
-        or os.environ.get("TERMUX_VERSION")
-    )
+    is_termux = os.path.exists(
+        "/data/data/com.termux/files/usr/bin/termux-audio"
+    ) or os.environ.get("TERMUX_VERSION")
 
     # Banner
     click.echo("\n" + "=" * 50)
@@ -579,115 +602,20 @@ def setup_cmd(
     click.echo("")
 
     # --- Provider selection ---
-    if provider and provider not in [p[0] for p in PROVIDER_OPTIONS]:
-        click.echo(f"Unknown provider: {provider}", err=True)
-        click.echo(f"Valid: {', '.join(p[0] for p in PROVIDER_OPTIONS)}")
-        return
-
     if not provider:
-        click.echo("  Select your AI provider:\n")
-        for i, (pid, name, badge, desc) in enumerate(PROVIDER_OPTIONS, 1):
-            badge_color = "green" if badge == "Recommended" else "yellow" if badge == "Free tier" or badge == "Local" else "cyan"
-            click.echo(f"  {i}. {name}")
-            click.echo(f"     [{badge_color}]{badge}[/{badge_color}] {desc}")
-        click.echo("")
+        from .onboarding import OnboardingManager
+        manager = OnboardingManager(config)
+        manager.run()
+        # After onboarding, we need to extract the selected provider for the rest of the function
+        provider = config.active_provider
+        # We also need the model and api_key from the config since manager.run() updated it
+        model = config.providers[provider].model
+        api_key = config.providers[provider].api_key
 
-        choice = click.prompt(
-            "Enter number (1-8)",
-            type=click.IntRange(1, len(PROVIDER_OPTIONS)),
-            default=1,
-            show_default=False,
-        )
-        provider = PROVIDER_OPTIONS[choice - 1][0]
-    else:
-        _, name, badge, desc = next(p for p in PROVIDER_OPTIONS if p[0] == provider)
-        click.echo(f"  Provider: {name} [{badge}]\n")
-
-    # --- Model selection ---
-    if provider == "opencode-zen":
-        model_choices = OPENCODE_ZEN_FREE_MODELS
-        if not model:
-            if non_interactive:
-                model = model_choices[0][0]
-            else:
-                click.echo("  Free models available on OpenCode Zen:\n")
-                for i, (mid, mname, mbadge) in enumerate(model_choices, 1):
-                    click.echo(f"  {i}. {mname} [{mbadge}]")
-                click.echo("")
-                mchoice = click.prompt(
-                    "Enter number",
-                    type=click.IntRange(1, len(model_choices)),
-                    default=1,
-                    show_default=False,
-                )
-                model = model_choices[mchoice - 1][0]
-        click.echo(f"  Model: {model}\n")
-    else:
-        if not model:
-            if non_interactive:
-                model = get_default_model(provider)
-            else:
-                model = click.prompt("  Model name", default=get_default_model(provider))
-        click.echo(f"  Model: {model}\n")
-
-    # --- API key ---
-    if provider == "ollama":
-        api_key = ""
-        click.echo("  No API key needed for Ollama (runs locally)\n")
-    else:
-        if non_interactive:
-            env_key = os.environ.get(f"{provider.upper()}_API_KEY", "")
-            api_key = api_key or env_key or ""
-        else:
-            instruction = API_KEY_INSTRUCTIONS.get(provider, "")
-            if instruction:
-                click.echo(f"  {instruction}")
-            api_key = click.prompt(
-                "  API Key (press Enter to skip)",
-                default="",
-                show_default=False,
-                hide_input=True,
-            )
-            if not api_key:
-                click.echo("  [Skipped — some models may not work without a key]")
-
-    # --- Base URL ---
-    base_url = get_base_url(provider)
-    click.echo("")
-
-    # --- Test connection ---
-    click.echo("  Testing connection...", nl=False)
-    test_result = test_provider_connection(provider, model, api_key, base_url)
-    if test_result["ok"]:
-        click.echo(" \u2713 OK")
-    else:
-        click.echo(f" \u2717 FAILED: {test_result['error']}")
-        click.echo("")
-        if not click.confirm("  Save anyway? (you can fix the key later)", default=False):
-            return
-
-    # --- Save config ---
-    provider_config = ProviderConfig(
-        name=provider,
-        provider_type=get_provider_type(provider),
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
-        max_tokens=8192,
-        temperature=0.7,
-        timeout=120,
-        enabled=True,
-    )
-
-    config.providers = {provider: provider_config}
-    config.active_provider = provider
-    save_config(config)
-
-    click.echo("")
-    click.echo("  \u2705 Setup complete!\n")
-
-    # Print cheatsheet
-    print_cheatsheet(provider, model, is_termux)
+        click.echo("\n[+] Setup complete!\n")
+        print_cheatsheet(provider, model, is_termux)
+        click.echo("\n[+] You're all set! Try: \033[1mnexus repl\033[0m to start chatting.")
+        return
 
 
 def test_provider_connection(provider: str, model: str, api_key: str, base_url: str | None) -> dict:
@@ -751,7 +679,9 @@ def test_provider_connection(provider: str, model: str, api_key: str, base_url: 
             return {"ok": False, "error": f"Unknown provider: {provider}"}
 
         with httpx.Client(timeout=10.0) as client:
-            resp = client.post(url, json=payload, headers=headers, params=params if provider == "google" else None)
+            resp = client.post(
+                url, json=payload, headers=headers, params=params if provider == "google" else None
+            )
 
         if resp.status_code == 200:
             return {"ok": True}
@@ -815,7 +745,7 @@ def print_cheatsheet(provider: str, model: str, is_termux: bool) -> None:
         click.echo("  nexus repl")
     click.echo("")
     click.echo("  # Run a single task")
-    click.echo("  nexus run \"Fix the login bug\"")
+    click.echo('  nexus run "Fix the login bug"')
     click.echo("")
     click.echo("  # Dashboard (optional web UI)")
     click.echo("  nexus dashboard")
@@ -836,108 +766,121 @@ def print_cheatsheet(provider: str, model: str, is_termux: bool) -> None:
 def doctor(ctx: click.Context) -> None:
     """Check system health and diagnose issues."""
     from ..config import DEFAULT_CONFIG_DIR
-    
-    click.echo("🔍 Running diagnostics...\n")
-    
+
+    click.echo("[*] Running diagnostics...\n")
+
     issues = []
-    
+
     # Check config directory
     if not DEFAULT_CONFIG_DIR.exists():
         issues.append(f"Config directory missing: {DEFAULT_CONFIG_DIR}")
-        click.echo("  ✗ Config directory missing")
+        click.echo("  [-] Config directory missing")
     else:
-        click.echo("  ✓ Config directory exists")
-    
+        click.echo("  [+] Config directory exists")
+
     # Check config file
     from ..config import DEFAULT_CONFIG_FILE
+
     if not DEFAULT_CONFIG_FILE.exists():
         issues.append(f"Config file missing: {DEFAULT_CONFIG_FILE}")
-        click.echo("  ✗ Config file missing")
+        click.echo("  [-] Config file missing")
     else:
-        click.echo("  ✓ Config file exists")
-    
+        click.echo("  [+] Config file exists")
+
     # Check providers
     config: NexusConfig = ctx.obj["config"]
     if not config.providers:
         issues.append("No providers configured")
-        click.echo("  ✗ No providers configured")
+        click.echo("  [-] No providers configured")
     else:
-        click.echo(f"  ✓ {len(config.providers)} provider(s) configured")
-    
+        click.echo(f"  [+] {len(config.providers)} provider(s) configured")
+
     # Check for common tools
     import shutil
+
     for tool in ["git", "python", "pip"]:
         if shutil.which(tool):
-            click.echo(f"  ✓ {tool} found")
+            click.echo(f"  [+] {tool} found")
         else:
             issues.append(f"{tool} not found in PATH")
-            click.echo(f"  ✗ {tool} not found")
-    
+            click.echo(f"  [-] {tool} not found")
+
     # Check for ripgrep
     if shutil.which("rg"):
-        click.echo("  ✓ ripgrep found (for search)")
+        click.echo("  [+] ripgrep found (for search)")
     else:
-        click.echo("  ⚠ ripgrep not found (install with: pip install ripgrep)")
-    
+        click.echo("  [!] ripgrep not found (install with: pip install ripgrep)")
+
     # Check learning system
     try:
         from ..learn import get_learning_engine
+
         le = get_learning_engine()
         stats = le.get_stats()
-        click.echo(f"  ✓ Learning engine: {stats['total_lessons']} lessons, {stats['total_failures']} failures")
+        click.echo(
+            f"  [+] Learning engine: {stats['total_lessons']} lessons, {stats['total_failures']} failures"
+        )
     except Exception as e:
-        click.echo(f"  ⚠ Learning engine error: {e}")
-    
+        click.echo(f"  [!] Learning engine error: {e}")
+
     # Check sync system
     try:
         from ..sync import get_sync_engine
+
         se = get_sync_engine()
         status = se.get_status()
         ep_count = len(status.get("endpoints", {}))
-        click.echo(f"  ✓ Sync engine: {ep_count} endpoint(s) configured")
+        click.echo(f"  [+] Sync engine: {ep_count} endpoint(s) configured")
     except Exception as e:
-        click.echo(f"  ⚠ Sync engine error: {e}")
-    
+        click.echo(f"  [!] Sync engine error: {e}")
+
     # Check safety engine
     try:
         from ..safety import get_safety_engine
+
         se = get_safety_engine()
-        click.echo(f"  ✓ Safety engine: {len(se.rules)} rules loaded")
+        click.echo(f"  [+] Safety engine: {len(se.rules)} rules loaded")
     except Exception as e:
-        click.echo(f"  ⚠ Safety engine error: {e}")
-    
+        click.echo(f"  [!] Safety engine error: {e}")
+
     # Check self-improvement
     try:
         from ..self_improve import get_self_improver
+
         si = get_self_improver()
         pending = len(si.get_improvement_queue())
-        click.echo(f"  ✓ Self-improvement: {pending} improvement(s) pending")
+        click.echo(f"  [+] Self-improvement: {pending} improvement(s) pending")
     except Exception as e:
-        click.echo(f"  ⚠ Self-improvement error: {e}")
-    
+        click.echo(f"  [!] Self-improvement error: {e}")
+
     # Check phone mode
     try:
         from ..phone import get_phone_mode
+
         pm = get_phone_mode()
-        click.echo(f"  ✓ Phone mode: {pm.profile.name} profile (auto-detected)")
+        click.echo(f"  [+] Phone mode: {pm.profile.name} profile (auto-detected)")
     except Exception as e:
-        click.echo(f"  ⚠ Phone mode error: {e}")
-    
+        click.echo(f"  [!] Phone mode error: {e}")
+
     # Check voice system
     try:
         from ..voice import get_voice_engine, list_tts_voices
+
         engine = get_voice_engine()
         voices = list_tts_voices()
-        click.echo(f"  ✓ Voice: TTS={engine.config.tts_provider} ({len(voices)} voices), STT={engine.config.stt_provider}")
+        click.echo(
+            f"  [+] Voice: TTS={engine.config.tts_provider} ({len(voices)} voices), STT={engine.config.stt_provider}"
+        )
     except Exception as e:
-        click.echo(f"  ⚠ Voice system error: {e}")
-    
+        click.echo(f"  [!] Voice system error: {e}")
+
     if issues:
-        click.echo(f"\n⚠ {len(issues)} issue(s) found:")
+        click.echo(f"\n[!] {len(issues)} issue(s) found:")
         for issue in issues:
             click.echo(f"  - {issue}")
+        click.echo("\n[*] Fix these issues by running: \033[1mnexus setup\033[0m")
     else:
-        click.echo("\n✅ All checks passed!")
+        click.echo("\n[+] All checks passed!")
 
 
 # Dashboard command (optional — lazy loaded)
@@ -948,26 +891,27 @@ def doctor(ctx: click.Context) -> None:
 @click.pass_context
 def dashboard(ctx: click.Context, port: int, host: str, open: bool) -> None:
     """Launch the optional web dashboard (lazy-loaded).
-    
+
     The dashboard provides a visual overview of sessions, stats, and provider status.
     Run 'nexus dashboard --help' for options.
     """
     try:
         from ..dashboard.app import create_app
-    except ImportError as e:
-        click.echo(f"Dashboard dependencies not installed.", err=True)
-        click.echo(f"Install with: pip install nexus[all] or pip install flask", err=True)
+    except ImportError:
+        click.echo("Dashboard dependencies not installed.", err=True)
+        click.echo("Install with: pip install nexus[all] or pip install flask", err=True)
         return
-    
+
     app = create_app()
-    
+
     if open:
-        import webbrowser
         import threading
+        import webbrowser
+
         threading.Timer(1.0, lambda: webbrowser.open(f"http://{host}:{port}")).start()
-    
+
     click.echo(f"Dashboard starting on http://{host}:{port}")
-    click.echo(f"Press Ctrl+C to stop")
+    click.echo("Press Ctrl+C to stop")
     app.run(host=host, port=port, debug=False)
 
 
@@ -977,7 +921,7 @@ def dashboard(ctx: click.Context, port: int, host: str, open: bool) -> None:
 def tui(ctx: click.Context) -> None:
     """Launch the rich Textual TUI."""
     from ..tui.app import NexusTUI
-    
+
     app = NexusTUI()
     app.run()
 
@@ -987,16 +931,23 @@ def tui(ctx: click.Context) -> None:
 @click.option("--tts", "tts_override", help="TTS provider override (e.g., freetts, openai)")
 @click.option("--stt", "stt_override", help="STT provider override (e.g., whisper, assemblyai)")
 @click.option("--voice", "voice_override", help="Voice name (e.g., en-US-Neural2-F)")
-@click.option("--continuous", is_flag=True, default=False, help="Keep listening after each response")
+@click.option(
+    "--continuous", is_flag=True, default=False, help="Keep listening after each response"
+)
 @click.pass_context
-def voice(ctx: click.Context, tts_override: str | None, stt_override: str | None,
-          voice_override: str | None, continuous: bool) -> None:
+def voice(
+    ctx: click.Context,
+    tts_override: str | None,
+    stt_override: str | None,
+    voice_override: str | None,
+    continuous: bool,
+) -> None:
     """Enter voice mode — Nexus speaks and listens like a partner.
-    
+
     This starts an interactive voice conversation where Nexus responds
     using text-to-speech and listens via speech-to-text. Works with
     microphone and speakers.
-    
+
     Examples:
 
         nexus voice                     Start with defaults
@@ -1004,14 +955,15 @@ def voice(ctx: click.Context, tts_override: str | None, stt_override: str | None
         nexus voice --stt whisper       Use local Whisper for STT
         nexus voice --voice en-US-Neural2-F  Use a specific voice
         nexus voice --continuous        Keep listening after each response
-    
+
     Provider options:
       TTS: freetts (default, no key), openai, espeak, pico
       STT: assemblyai, deepgram, whisper, freetts
     """
     import asyncio
-    from ..voice import get_voice_engine
+
     from ..personality import get_personality
+    from ..voice import get_voice_engine
 
     async def _run():
         overrides = {}
@@ -1029,10 +981,9 @@ def voice(ctx: click.Context, tts_override: str | None, stt_override: str | None
         click.echo("Say something or press Ctrl+C to exit...\n")
 
         async def _llm_callback(text: str) -> str:
+            from ..personality import get_personality
             from ..providers import get_manager
             from ..tools import get_registry
-            from ..providers.base import Message
-            from ..personality import get_personality
 
             manager = get_manager()
             registry = get_registry()
@@ -1075,12 +1026,13 @@ def voice(ctx: click.Context, tts_override: str | None, stt_override: str | None
 @click.pass_context
 def repl(ctx: click.Context) -> None:
     """Start an interactive REPL session.
-    
+
     The REPL provides an interactive chat interface with Nexus.
     Use /help inside the REPL for available slash commands.
     """
     from ..cli.repl import run_repl
     from ..config import load_config
+
     config = load_config()
     config_dict = {
         "providers": {k: v.to_dict() for k, v in config.providers.items()},
@@ -1096,11 +1048,12 @@ def repl(ctx: click.Context) -> None:
 @click.pass_context
 def run(ctx: click.Context, task: str) -> None:
     """Run a single task and exit.
-    
+
     Useful for scripting and one-shot automation tasks.
     """
     from ..cli.repl import run_task
     from ..config import load_config
+
     config = load_config()
     config_dict = {
         "providers": {k: v.to_dict() for k, v in config.providers.items()},
@@ -1122,49 +1075,53 @@ def automation():
 @automation.command("status")
 def automation_status() -> None:
     """Check automation system status."""
-    from ..automation import is_browser_available, BrowserAutomation, ApiAutomation
+    from ..automation import is_browser_available
     from ..automation.browser import PLAYWRIGHT_AVAILABLE
-    
+
     click.echo("\nAutomation Status:\n")
-    
-    click.echo(f"  Playwright:     {'✓ installed' if PLAYWRIGHT_AVAILABLE else '✗ not installed'}")
-    click.echo(f"  Chromium:       {'✓ available' if is_browser_available() else '✗ not installed (run: nexus automation install-browser)'}")
-    
+
+    click.echo(f"  Playwright:     {'[+] installed' if PLAYWRIGHT_AVAILABLE else '[-] not installed'}")
+    click.echo(
+        f"  Chromium:       {'[+] available' if is_browser_available() else '[-] not installed (run: nexus automation install-browser)'}"
+    )
+
     if PLAYWRIGHT_AVAILABLE:
-        click.echo(f"\n  Browser:        Configured for stealth/anti-detection")
-        click.echo(f"  User-Agent:     Randomized rotation enabled")
-        click.echo(f"  CAPTCHA detect: Built-in (recaptcha, hcaptcha, cloudflare)")
-        click.echo(f"  Human-like:    Mouse curves, keystroke delays, scroll")
-    
-    click.echo(f"\n  API Client:     httpx (always available)")
-    click.echo(f"  Rate limiting:  1-3s delay between requests")
-    click.echo(f"  Header rotate:  Referrer, Sec-Fetch, Accept-Language\n")
+        click.echo("\n  Browser:        Configured for stealth/anti-detection")
+        click.echo("  User-Agent:     Randomized rotation enabled")
+        click.echo("  CAPTCHA detect: Built-in (recaptcha, hcaptcha, cloudflare)")
+        click.echo("  Human-like:    Mouse curves, keystroke delays, scroll")
+
+    click.echo("\n  API Client:     httpx (always available)")
+    click.echo("  Rate limiting:  1-3s delay between requests")
+    click.echo("  Header rotate:  Referrer, Sec-Fetch, Accept-Language\n")
 
 
 @automation.command("install-browser")
-@click.option("--browser", default="chromium", help="Browser to install (chromium, firefox, webkit)")
+@click.option(
+    "--browser", default="chromium", help="Browser to install (chromium, firefox, webkit)"
+)
 @click.option("--with-deps", is_flag=True, default=False, help="Install system dependencies")
 def automation_install_browser(browser: str, with_deps: bool) -> None:
     """Install browser for automation. Run this once on a new machine."""
+    from ..automation.browser import PLAYWRIGHT_AVAILABLE
+
     if not PLAYWRIGHT_AVAILABLE:
         click.echo("Playwright not installed. Run: pip install playwright")
         return
-    
+
     click.echo(f"Installing {browser}...")
     import subprocess
-    venv_python = os.path.join(os.getcwd(), "venv", "bin", "playwright")
-    if not os.path.exists(venv_python):
-        venv_python = "playwright"
-    cmd = [venv_python, "install"]
+
+    cmd = ["playwright", "install"]
     if with_deps:
         cmd.append("--with-deps")
     cmd.append(browser)
-    
+
     result = subprocess.run(cmd)
     if result.returncode == 0:
-        click.echo(f"✓ {browser} installed successfully")
+        click.echo(f"[+] {browser} installed successfully")
     else:
-        click.echo(f"✗ Installation failed (exit code: {result.returncode})")
+        click.echo(f"[-] Installation failed (exit code: {result.returncode})")
         click.echo(f"  Try: playwright install {browser} --with-deps")
 
 
@@ -1172,9 +1129,9 @@ def automation_install_browser(browser: str, with_deps: bool) -> None:
 def initialize_providers(config: NexusConfig) -> None:
     """Initialize providers from configuration."""
     manager = get_manager()
-    for name, cfg in config.providers.items():
+    for _name, cfg in config.providers.items():
         manager.add_provider(cfg)
-    
+
     if config.active_provider in config.providers:
         manager.set_active(config.active_provider)
 

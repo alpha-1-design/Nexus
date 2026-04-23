@@ -1,12 +1,34 @@
 """Utilities for Nexus."""
 
 import asyncio
+<<<<<<< HEAD
 import sys
 from typing import Any, Callable, TypeVar
+=======
+import logging
+import re
+from typing import Any, TypeVar
+>>>>>>> 8b77f00 (feat: implement dynamic ReAct loop and enhance CLI/TUI)
 
 T = TypeVar("T")
 
 
+<<<<<<< HEAD
+=======
+def get_logger(name: str) -> logging.Logger:
+    """Get a configured logger instance."""
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
+        logger.addHandler(handler)
+        logger.setLevel(logging.WARNING)
+    return logger
+
+
+>>>>>>> 8b77f00 (feat: implement dynamic ReAct loop and enhance CLI/TUI)
 def run_async(coro: Any) -> Any:
     """Run an async function in a sync context."""
     try:
@@ -16,6 +38,10 @@ def run_async(coro: Any) -> Any:
 
     if loop and loop.is_running():
         import concurrent.futures
+<<<<<<< HEAD
+=======
+
+>>>>>>> 8b77f00 (feat: implement dynamic ReAct loop and enhance CLI/TUI)
         with concurrent.futures.ThreadPoolExecutor() as pool:
             future = pool.submit(asyncio.run, coro)
             return future.result()
@@ -56,3 +82,41 @@ def pluralize(count: int, singular: str, plural: str | None = None) -> str:
     if count == 1:
         return singular
     return plural or singular + "s"
+<<<<<<< HEAD
+=======
+
+
+SENSITIVE_PATTERNS = [
+    (
+        re.compile(r'([a-zA-Z0-9_-]+[_-]?key["\']?\s*[:=]\s*["\']?)([a-zA-Z0-9_\-]{8,})', re.I),
+        r"\1[REDACTED]",
+    ),
+    (re.compile(r"(bearer\s+)([a-zA-Z0-9_\-\.]{10,})", re.I), r"\1[REDACTED]"),
+    (re.compile(r"(ghp_[a-zA-Z0-9]{36})"), "[GITHUB_TOKEN]"),
+    (re.compile(r"(sk-[a-zA-Z0-9]{20,})"), "[API_KEY]"),
+    (re.compile(r"(xai-[a-zA-Z0-9_-]{20,})"), "[XAI_KEY]"),
+    (re.compile(r"/home/[a-zA-Z0-9_]+/"), "/home/[USER]/"),
+    (re.compile(r"C:\\Users\\[a-zA-Z0-9_]+\\"), "C:\\Users\\[USER]\\"),
+]
+
+
+def sanitize_error(error: str | Exception, max_length: int = 200) -> str:
+    """Sanitize an error message to prevent information disclosure.
+
+    Removes or redacts:
+    - API keys and tokens
+    - File paths with usernames
+    - Bearer tokens
+    """
+    if isinstance(error, Exception):
+        error = str(error)
+
+    sanitized = error
+    for pattern, replacement in SENSITIVE_PATTERNS:
+        sanitized = pattern.sub(replacement, sanitized)
+
+    if len(sanitized) > max_length:
+        sanitized = sanitized[:max_length] + "..."
+
+    return sanitized
+>>>>>>> 8b77f00 (feat: implement dynamic ReAct loop and enhance CLI/TUI)

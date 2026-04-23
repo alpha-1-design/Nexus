@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
@@ -12,6 +13,47 @@ from ..memory import Memory
 from ..thinking import ThinkingEngine, ThinkingState, get_thinking_engine
 from ..agents import MultiAgentTeam, AgentRole, init_team, get_team
 from ..plugins import get_plugin_manager
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate token count using a simple approximation (4 chars per token)."""
+    if not text:
+        return 0
+    return len(re.findall(r'\w+', text)) + (len(text) // 4)
+
+
+def prune_messages(
+    messages: list[Message],
+    max_tokens: int,
+    prune_ratio: float = 0.8,
+) -> list[Message]:
+    """Prune messages when approaching token limit.
+
+    Keeps recent messages and summarizes old ones.
+    """
+    if not messages:
+        return messages
+
+    current_tokens = sum(estimate_tokens(m.content or "") for m in messages)
+    if current_tokens <= max_tokens:
+        return messages
+
+    system_messages = [m for m in messages if m.role == "system"]
+    other_messages = [m for m in messages if m.role != "system"]
+
+    while estimate_tokens("".join(m.content or "" for m in messages)) > max_tokens * prune_ratio and len(other_messages) > 2:
+        msg_to_summarize = other_messages[0]
+        summary = f"[Earlier: {msg_to_summarize.role} said {msg_to_summarize.content[:100]}...]"
+
+        summary_msg = Message(
+            role="system",
+            content=summary,
+        )
+        system_messages.append(summary_msg)
+
+        other_messages = other_messages[1:]
+
+    return system_messages + other_messages
 
 
 @dataclass
@@ -26,6 +68,8 @@ class AgentConfig:
     reflection_enabled: bool = True
     reflection_max_retries: int = 3
     system_prompt: str | None = None
+    max_context_tokens: int = 128000
+    context_prune_ratio: float = 0.8
 
 
 @dataclass
@@ -38,6 +82,7 @@ class Turn:
     tokens_used: int = 0
     duration_ms: int = 0
     error: str | None = None
+    pending_approval: dict[str, Any] | None = None
 
 
 class AgentOrchestrator:
@@ -137,6 +182,8 @@ class AgentOrchestrator:
             result = await self._run_loop(stream_callback)
             turn.assistant_message = result["message"]
             turn.tool_calls = result.get("tool_calls", [])
+            if result.get("pending_approval"):
+                turn.pending_approval = result["pending_approval"]
 
             review_step = self._thinking.start_step(
                 ThinkingState.REVIEWING,
@@ -171,6 +218,13 @@ class AgentOrchestrator:
         while self._turn_count <= self.config.max_turns:
             if self._tool_call_count >= self.config.max_tool_calls:
                 raise RuntimeError(f"Max tool calls ({self.config.max_tool_calls}) reached")
+
+            if self.config.max_context_tokens > 0:
+                self._messages = prune_messages(
+                    self._messages,
+                    self.config.max_context_tokens,
+                    self.config.context_prune_ratio,
+                )
 
             if self.config.stream and stream_callback:
                 tool_calls_accumulated = []
@@ -207,6 +261,23 @@ class AgentOrchestrator:
             for tc in tool_calls:
                 self._tool_call_count += 1
                 tool_result = await self._execute_tool(tc, turn=Turn(user_message=""))
+
+                # --- INTERACTIVE APPROVAL FLOW ---
+                # If the tool returns a result requiring human approval (like a diff)
+                if isinstance(tool_result, ToolResult) and tool_result.metadata and tool_result.metadata.get("action") == "require_approval":
+                    # This is where we pause the loop and wait for user input.
+                    # In the TUI, this will trigger a modal/prompt.
+                    # For the orchestrator, we return a special signal to the TUI.
+                    return {
+                        "message": f"I have a proposed change for {tool_result.metadata['path']}. Please review the diff.",
+                        "tool_calls": [],
+                        "pending_approval": {
+                            "tool_name": tc.name,
+                            "args": tc.arguments,
+                            "result": tool_result
+                        }
+                    }
+
                 tool_msg = f"Tool result for {tc.name}: {tool_result.content}"
                 if tool_result.error:
                     tool_msg += f"\nError: {tool_result.error}"

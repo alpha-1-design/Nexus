@@ -1,23 +1,24 @@
 """Provider manager - handles multiple AI providers with fallback and routing."""
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
-import asyncio
+from typing import Any
 
+from ..config import ProviderConfig
 from .base import (
+    PROVIDER_REGISTRY,
     BaseProvider,
     Message,
     ModelInfo,
     Response,
     StreamChunk,
-    create_provider,
 )
-from ..config import ProviderConfig
 
 
 @dataclass
 class CostTracker:
     """Track usage costs per provider."""
+
     requests: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -29,7 +30,7 @@ class CostTracker:
         self.requests += 1
         self.input_tokens += usage.get("prompt_tokens", 0)
         self.output_tokens += usage.get("completion_tokens", 0)
-        
+
         input_cost = (usage.get("prompt_tokens", 0) / 1_000_000) * cost_per_million.get("input", 0)
         output_cost = (usage.get("completion_tokens", 0) / 1_000_000) * cost_per_million.get("output", 0)
         self.total_cost += input_cost + output_cost
@@ -43,7 +44,7 @@ class ProviderManager:
         self.configs: dict[str, ProviderConfig] = {}
         self.active_provider: str = "openai"
         self.cost_tracker: CostTracker = CostTracker()
-        
+
         # Cost per million tokens (approximate)
         self.cost_rates: dict[str, dict[str, float]] = {
             "openai": {"input": 2.5, "output": 10.0},  # GPT-4o
@@ -85,13 +86,13 @@ class ProviderManager:
     async def get_provider(self, name: str | None = None) -> BaseProvider:
         """Get a provider instance, creating if needed."""
         name = name or self.active_provider
-        
+
         if name not in self.providers:
             config = self.configs.get(name)
             if not config:
                 raise ValueError(f"Provider '{name}' not found")
             self.providers[name] = self._create_provider(config)
-        
+
         return self.providers[name]
 
     async def complete(
@@ -99,27 +100,34 @@ class ProviderManager:
         messages: list[Message],
         tools: list[dict[str, Any]] | None = None,
         provider_name: str | None = None,
-        **kwargs
+        **kwargs,
     ) -> Response:
-        """Generate a completion with fallback support."""
-        provider_names = [provider_name] if provider_name else list(self.providers.keys())
-        
+        """Generate a completion with smart fallback support."""
+        # Try active first, then fallback to others
+        active = provider_name or self.active_provider
+        provider_names = [active] + [n for n in self.configs.keys() if n != active]
+
         last_error = None
         for name in provider_names:
             try:
                 provider = await self.get_provider(name)
                 response = await provider.complete(messages, tools, **kwargs)
-                
+
                 # Track costs
                 if response.usage:
                     rates = self.cost_rates.get(name, {"input": 0, "output": 0})
                     self.cost_tracker.add_usage(response.usage, rates)
-                
+
                 return response
             except Exception as e:
                 last_error = e
+                cyan = "\033[36m"
+                blue = "\033[34m"
+                dim = "\033[90m"
+                reset = "\033[0m"
+                print(f"  {blue}╼{reset} {dim}nexus/providers{reset} {cyan}{name}{reset} {dim}failed. Switching fallback...{reset}")
                 continue
-        
+
         raise RuntimeError(f"All providers failed. Last error: {last_error}")
 
     async def stream(
@@ -127,24 +135,41 @@ class ProviderManager:
         messages: list[Message],
         tools: list[dict[str, Any]] | None = None,
         provider_name: str | None = None,
-        **kwargs
+        **kwargs,
     ) -> AsyncIterator[StreamChunk]:
-        """Stream a completion with fallback support."""
-        provider = await self.get_provider(provider_name or self.active_provider)
+        """Stream a completion with smart fallback support."""
+        active = provider_name or self.active_provider
+        provider_names = [active] + [n for n in self.configs.keys() if n != active]
         
-        async for chunk in provider.stream(messages, tools, **kwargs):
-            yield chunk
+        last_error = None
+        for name in provider_names:
+            try:
+                provider = await self.get_provider(name)
+                async for chunk in provider.stream(messages, tools, **kwargs):
+                    yield chunk
+                return
+            except Exception as e:
+                last_error = e
+                cyan = "\033[36m"
+                blue = "\033[34m"
+                dim = "\033[90m"
+                reset = "\033[0m"
+                print(f"  {blue}╼{reset} {dim}nexus/providers{reset} {cyan}{name}{reset} {dim}stream failure. Switching fallback...{reset}")
+                continue
+        
+        # If we get here, all failed
+        raise RuntimeError(f"All providers failed to stream. Last error: {last_error}")
 
     async def list_models(self, provider_name: str | None = None) -> list[ModelInfo]:
         """List models from one or all providers."""
         if provider_name:
             provider = await self.get_provider(provider_name)
             return await provider.list_models()
-        
+
         all_models = []
         for name in self.providers:
             try:
-                provider = await self.providers[name]
+                provider = self.providers[name]
                 models = await provider.list_models()
                 all_models.extend(models)
             except Exception:
@@ -157,9 +182,9 @@ class ProviderManager:
         config = self.configs.get(name)
         if not config:
             raise ValueError(f"Provider '{name}' not found")
-        
+
         config.model = model
-        
+
         # Recreate the provider with new model
         if name in self.providers:
             await self.providers[name].close()
@@ -189,10 +214,6 @@ class ProviderManager:
             await provider.close()
 
 
-# Import registry from base
-from .base import PROVIDER_REGISTRY
-
-
 # Global provider manager instance
 _manager: ProviderManager | None = None
 
@@ -202,7 +223,34 @@ def get_manager() -> ProviderManager:
     global _manager
     if _manager is None:
         _manager = ProviderManager()
+        _load_config_into_manager(_manager)
     return _manager
+
+
+def _load_config_into_manager(manager: ProviderManager) -> None:
+    """Load provider configurations from config file."""
+    try:
+        from ..config import load_config
+        cfg = load_config()
+
+        for name, prov_config in cfg.providers.items():
+            from ..config import ProviderConfig
+            manager.configs[name] = ProviderConfig(
+                name=prov_config.name,
+                provider_type=prov_config.provider_type,
+                api_key=prov_config.api_key or "",
+                base_url=prov_config.base_url,
+                model=prov_config.model,
+                max_tokens=prov_config.max_tokens,
+                temperature=prov_config.temperature,
+                timeout=prov_config.timeout,
+                enabled=prov_config.enabled,
+            )
+
+        if cfg.active_provider and cfg.active_provider in manager.configs:
+            manager.active_provider = cfg.active_provider
+    except Exception:
+        pass
 
 
 async def reset_manager() -> None:

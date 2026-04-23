@@ -1,74 +1,81 @@
-# Nexus
+<img width="720" height="1600" alt="1000419577" src="https://github.com/user-attachments/assets/98b18818-eaee-4820-a945-594bfa839859" />
+
+# Nexus - Your AI Coding Agent
 
 **A self-hosted AI coding agent CLI that actually works out of the box.**
 
-No boilerplate. No cloud lock-in. No "works on my machine" surprises. Nexus runs on anything with Python 3.10+ — including that old laptop gathering dust, a cheap Android phone via Termux, or a $5/month VPS.
+Nexus is designed to be dynamic, responsive, and deeply integrated into your workflow, especially on mobile environments like Termux. It offers a seamless blend of natural language interaction, intelligent tool usage, and a visually engaging CLI experience.
 
+<img width="720" height="1600" alt="Nexus Logo" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA... (binary data embedded)" />
+
+```
+░▒█║  ░▒█║ ░▒█║▀▀▀ ░▒█║  ░▒█║ ░▒█║  ░▒█║ ░▒█║▀▀▀
+░▒█║▀█░▒█║ ░▒█║▀▀  ░▒█║  ░▒█║ ░▒█║  ░▒█║ ░▒█║▀▀ 
+░▒█║  ░▒█║ ░▒█║▄▄▄ ░▒█║▄█░▒█║ ░▒█║▄█░▒█║ ░▒█║▄▄▄
+▀▀▀▀  ▀▀▀▀ ▀▀▀▀▀▀▀  ▀▀▀ ▀▀▀▀   ▀▀▀ ▀▀▀▀  ▀▀▀▀▀▀▀
+
+N E X U S   O S   I N I T I A L I Z E D  [build 2026.04.22]
+──────────────────────────────────────────────────────────
+[NEURAL] Synaptic weights loaded... OK
+[MEMRY] SQLite vector-mesh active... OK
+[TOOLS] Execution registry online... OK
+[SYNC ] Cross-device uplink standby... OK
+
+Welcome to the Nexus.
+Enter a command or type /help to begin the cycle.
+```
+
+## Key Features
+
+*   **Dynamic ReAct Loop:** Nexus reasons, acts, and observes in real-time, adapting to task results and errors. No more rigid planning.
+*   **Atmospheric UI:** A visually engaging CLI experience with sci-fi styling, pulsing animations, and clear status indicators.
+*   **Proactive Dependency Management:** Optional features (Voice, Automation) prompt for installation when first used.
+*   **Smart Provider Fallbacks:** If one LLM provider fails, Nexus automatically switches to another.
+*   **Hands-Free Voice Commands:** Integrated `/voice` command for speaking commands.
+*   **Update Notifications:** Get notified of new versions upon startup.
+*   **Hardened Tooling:** Reliable file editing and execution.
+*   **Termux-Native:** Optimized for mobile environments.
+
+---
+
+## Quick Start
+
+### 1. Install Nexus
 ```bash
-git clone https://github.com/nexus-ai/nexus.git && cd nexus
+git clone https://github.com/alpha-1-design/Nexus.git && cd Nexus
 pip install -e .
+```
+
+### 2. Launch Interactive Session
+
+**REPL Mode:**
+```bash
 nexus repl
 ```
+This starts the command-line interface where you can interact with Nexus using natural language or slash commands (type `/help` for a list).
 
-That's the entire setup. OpenCode Zen free models work immediately with zero API keys.
-
----
-
-## Why Nexus?
-
-Most AI coding tools assume you have a beefy development machine, a paid API subscription, and hours to debug environment issues. Nexus flips that.
-
-- **Works where you are.** Chromebook? Old MacBook? Android phone running Termux? A Raspberry Pi? Nexus doesn't care.
-- **Zero-config first run.** No API keys required — free OpenCode Zen models work on launch. Bring your own keys if you want, but you don't have to.
-- **Self-hosted dashboard.** Optional web UI for visualization, session history, and browser automation. Your data stays on your machine.
-- **Real browser automation.** Playwright-powered agent can browse, click, type, and screenshot. Useful for automating web tasks or scraping without fighting anti-bots.
-- **Termux-native.** Clipboard integration, notification hooks, and a compact TUI mode designed for small phone screens.
-- **Memory that persists.** Sessions, learnings, and facts survive restarts. The agent gets better over time.
-- **Tool-augmented.** File editing, bash execution, git operations, web search, and browser control built-in.
-
----
-
-## Commands
-
-| Command | Description |
-|---|---|
-| `nexus repl` | Interactive chat session with the AI |
-| `nexus run "fix the login bug"` | Run a single task and exit |
-| `nexus dashboard` | Start the web UI (optional) |
-| `nexus setup` | Interactive provider configuration |
-| `nexus doctor` | Diagnose setup and connectivity |
-| `nexus tui` | Compact terminal UI for small screens |
-| `nexus sync` | Sync sessions across machines |
-| `nexus learn` | Show learnings and improvement queue |
-
-**Slash commands (inside REPL):**
-
+**TUI Mode:**
+```bash
+nexus tui
 ```
-/help           Show all commands
-/exit           Leave the session
-/clear          Wipe conversation
-/tools          List available tools
-/model <name>   Switch model mid-session
-/fact <k> <v>   Store a persistent fact
-/save           Persist current session
-```
+This launches the full Textual TUI application with panels for Chat, Thinking, Tools, and Agents.
 
 ---
 
-## Providers
+## Providers & Configuration
 
-Nexus uses OpenAI-compatible provider abstraction. Configure one or more:
+Nexus uses an OpenAI-compatible provider abstraction. Configure your preferred LLMs:
 
-| Provider | API Key | Free Tier | Notes |
-|---|---|---|---|
-| **OpenCode Zen** | None | Yes (default) | Works immediately |
-| **Groq** | `GROQ_API_KEY` | Yes | Fast inference |
-| **OpenAI** | `OPENAI_API_KEY` | No | Full model range |
-| **Anthropic** | `ANTHROPIC_API_KEY` | No | Claude models |
-| **Gemini** | `GOOGLE_API_KEY` | Limited | Google's models |
-| **Ollama** | None | Yes | Local models |
-| **Deepseek** | `DEEPSEEK_API_KEY` | Limited | Cost-effective |
-| **Custom** | Varies | Varies | Any OpenAI-compatible API |
+| Provider     | API Key          | Free Tier | Notes                               |
+|--------------|------------------|-----------|-------------------------------------|
+| **OpenCode Zen** | None             | Yes (default) | Works immediately                   |
+| **Groq**     | `GROQ_API_KEY`   | Yes       | Fast inference                      |
+| **OpenAI**   | `OPENAI_API_KEY` | No        | Full model range                    |
+| **Anthropic**| `ANTHROPIC_API_KEY`| No        | Claude models                       |
+| **Gemini**   | `GOOGLE_API_KEY` | Limited   | Google's models                     |
+| **Ollama**   | None             | Yes       | Local models                        |
+| **Deepseek** | `DEEPSEEK_API_KEY`| Limited   | Cost-effective                      |
+| **Custom**   | Varies           | Varies    | Any OpenAI-compatible API           |
 
 ```bash
 # Quick setup with OpenCode Zen (default)
@@ -83,66 +90,13 @@ nexus provider set-active groq
 
 ---
 
-## Termux / Android
+## Extending Nexus
 
-Nexus is designed to work well on Android via Termux.
+Adding new tools or features is designed to be simple:
 
-```bash
-pkg install python git
-git clone https://github.com/nexus-ai/nexus.git
-cd nexus
-pip install -e .
-nexus repl
-```
-
-**Termux-specific features:**
-- Clipboard read/write integration
-- Push notification hooks (via Termux:API)
-- Compact TUI mode (`nexus tui`) for small screens
-- Auto-detects Termux environment and adjusts output
-
-No need to SSH into a remote machine just to use an AI coding agent. Run it locally on your phone.
-
----
-
-## Browser Automation
-
-```bash
-# One-time browser install
-nexus automation install-browser
-
-# Then use it in a session
-nexus repl
-# Agent can now browse URLs, click elements, fill forms, take screenshots
-```
-
-Powered by Playwright with stealth mode: randomized user-agents, human-like mouse curves, keystroke timing, and built-in CAPTCHA detection.
-
----
-
-## Architecture
-
-```
-nexus/
-├── cli/          REPL, TUI, and command interface
-├── providers/    AI provider abstraction (OpenAI-compatible)
-├── tools/       File editing, bash, git, search, browser
-├── memory/      SQLite-backed session and fact storage
-├── dashboard/   Optional Flask web UI
-├── automation/  Browser and API automation
-└── agents/      Multi-agent orchestration
-```
-
----
-
-## Configuration
-
-Config lives at `~/.nexus/config.json`. You can also pass `--config /path/to/config` to any command.
-
-```bash
-nexus config --show    # Print current config
-nexus config --edit    # Open in editor
-```
+1.  **New Tool:** Create a Python class inheriting from `nexus.tools.base.BaseTool` in `nexus/tools/core.py`. Register it in `nexus/tools/core.py`'s `register_all` function.
+2.  **New Extension (e.g., Voice):** Install necessary libraries (e.g., `pip install faster-whisper`). Nexus will prompt for installation if they're missing when the feature is used.
+3.  **New Provider:** Add its configuration via `nexus provider add`.
 
 ---
 
