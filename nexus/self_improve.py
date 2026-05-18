@@ -393,14 +393,14 @@ async def safe_file_operation(path: str | Path, operation: callable, *args, **kw
     Falls back gracefully if file doesn't exist.
     """
     path = Path(path)
-    
+
     if operation.__name__ in ("read", "read_text"):
         if not path.exists():
             return {"success": False, "error": f"File not found: {path}"}
-    
+
     if operation.__name__ in ("write", "write_text"):
         path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     try:
         result = await operation(*args, **kwargs) if asyncio.iscoroutinefunction(operation) \\
                                  else operation(*args, **kwargs)
@@ -440,7 +440,7 @@ async def resilient_request(
                 return {"success": False, "error": f"Failed after {max_retries} attempts: {e}"}
             delay = min(base_delay * (2 ** attempt), max_delay)
             await asyncio.sleep(delay)
-    
+
     return {"success": False, "error": "Max retries exceeded"}
 ''',
         }
@@ -449,7 +449,7 @@ async def resilient_request(
 
     def _generate_project_helper(self, failures: list[dict], task_context: str) -> str:
         """Generate a project-specific helper script."""
-        tools_used = list(set(f.get("tool_name", "") for f in failures))
+        tools_used = list({f.get("tool_name", "") for f in failures})
 
         return f'''"""Auto-generated project helper for Nexus.
 Generated from session analysis. User should review before relying on this.
@@ -470,11 +470,11 @@ async def project_quick_task(task_type: str, **kwargs):
     handlers = {{
         # Add project-specific handlers here
     }}
-    
+
     handler = handlers.get(task_type)
     if handler:
         return await handler(**kwargs)
-    
+
     return {{"error": f"No handler for task type: {{task_type}}"}}
 
 
@@ -482,12 +482,12 @@ def detect_project_root(path: Path | None = None) -> Path | None:
     """Detect project root from common markers."""
     markers = [".git", "pyproject.toml", "package.json", "Cargo.toml", "go.mod"]
     search = (path or Path.cwd())
-    
+
     while search != search.parent:
         if any((search / m).exists() for m in markers):
             return search
         search = search.parent
-    
+
     return None
 '''
 

@@ -359,7 +359,7 @@ async def rate_limited_{failure.tool_name}(...):
             if not failure.resolution:
                 failure.resolution = outcome
                 failure.resolved_by = "session_end"
-            lesson = self.synthesize_lesson(failure)
+            self.synthesize_lesson(failure)
             lessons_created += 1
 
         self._lessons_cache = None  # Invalidate cache
@@ -415,7 +415,7 @@ async def rate_limited_{failure.tool_name}(...):
 
     def ask_reflection(self) -> str:
         """Build the reflection prompt shown to user after work."""
-        stats = self.get_stats()
+        self.get_stats()
         failures = self._current_session_failures
 
         if not failures:

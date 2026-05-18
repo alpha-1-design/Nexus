@@ -115,7 +115,7 @@ class NexusDoctor:
         """Verify essential tools are present."""
         required = {"textual": "textual", "requests": "requests", "openai": "openai"}
         details = {}
-        for pkg, pip_name in required.items():
+        for pkg, _pip_name in required.items():
             try:
                 import importlib
 

@@ -274,7 +274,7 @@ class SyncEngine:
         if not files:
             return {"success": True, "message": "Nothing to push", "items": 0}
 
-        gist_name = endpoint.metadata.get("gist_name", "nexus-sessions")
+        endpoint.metadata.get("gist_name", "nexus-sessions")
 
         try:
             # Try to update existing gist

@@ -21,7 +21,6 @@ from ..sync import get_sync_engine
 from ..thinking import ThinkingState, get_thinking_engine
 from ..tools import ToolResult
 from ..ui import ProgressTracker
-from ..voice import get_voice_engine
 
 
 class REPL:
@@ -580,7 +579,7 @@ When using tools, always provide clear feedback about what you're doing.
 
         layers = ["IDENTITY", "SAFETY", "PROJECT", "MEMORY", "USER"]
         print(f"  {dim}INITIALIZING NEURAL LAYERS: {reset}", end="", flush=True)
-        for layer in layers:
+        for _layer in layers:
             time.sleep(0.04)
             sys.stdout.write(f"{cyan}◈{reset}")
             sys.stdout.flush()
@@ -622,7 +621,6 @@ When using tools, always provide clear feedback about what you're doing.
         if not path or not os.path.exists(path):
             return True, None
 
-        red = "\033[31m"
         green = "\033[32m"
         reset = "\033[0m"
 
@@ -1146,7 +1144,7 @@ Available commands:
                     print(f"✗ Failed: {result.get('error')}")
             elif sub == "run":
                 print("\n🤖 Running self-improvement loop...")
-                session_summary = {"tasks_completed": len(self.session.messages) // 2, "failures": []}
+                {"tasks_completed": len(self.session.messages) // 2, "failures": []}
                 improvements = self.improver.run_improvement_loop(
                     [],  # failures list
                     task_context=str(self.session.messages[-1]["content"])[:100] if self.session.messages else "",
@@ -1183,7 +1181,7 @@ Available commands:
                 self.safety.disable_strict_mode()
                 print("Permissive mode — warnings are suggestions only")
             elif sub == "rules":
-                for rid, rule in list(self.safety.rules.items())[:10]:
+                for _rid, rule in list(self.safety.rules.items())[:10]:
                     print(f"  [{rule.level.name}] {rule.name}: {rule.description[:50]}")
             else:
                 print("Usage: /safety status|strict|permissive|rules")
@@ -1216,7 +1214,7 @@ Available commands:
             return
 
         try:
-            plan = await self._plan_mode.generate_plan(self.manager, self.messages)
+            await self._plan_mode.generate_plan(self.manager, self.messages)
             print(self._plan_mode.format_for_display())
 
             # Wait for user input
@@ -1515,7 +1513,6 @@ Available commands:
 
     def _draw_harvest_grid(self, content: str, term_width: int) -> None:
         """Draw a 'Data Harvest' grid for web results."""
-        cyan = "\033[36m"
         dim = "\033[90m"
         reset = "\033[0m"
 

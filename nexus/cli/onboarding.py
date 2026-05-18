@@ -48,7 +48,7 @@ class OnboardingManager:
         ]
 
         click.echo("\033[1mWhere shall we connect your intelligence?\033[0m\n")
-        for i, (pid, name, badge, desc) in enumerate(options, 1):
+        for i, (_pid, name, badge, desc) in enumerate(options, 1):
             color = "green" if badge == "Free" else "cyan" if badge == "Elite" else "yellow"
             click.echo(f"  {i}. {name} \033[3{color}m[{badge}]\033[0m")
             click.echo(f"     \033[90m{desc}\033[0m")

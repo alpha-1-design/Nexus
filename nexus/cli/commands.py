@@ -632,7 +632,7 @@ def setup_cmd(
         provider = config.active_provider
         # We also need the model and api_key from the config since manager.run() updated it
         model = config.providers[provider].model
-        api_key = config.providers[provider].api_key
+        config.providers[provider].api_key
 
         click.echo("\n[+] Setup complete!\n")
         print_cheatsheet(provider, model, is_termux)
@@ -882,7 +882,6 @@ def doctor(ctx: click.Context) -> None:
 
     # Check voice system
     try:
-        from ..voice import get_voice_engine, list_tts_voices
 
         engine = get_voice_engine()
         voices = list_tts_voices()
@@ -996,7 +995,6 @@ def voice(
     import asyncio
 
     from ..personality import get_personality
-    from ..voice import get_voice_engine
 
     async def _run():
         overrides = {}

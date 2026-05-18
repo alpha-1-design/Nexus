@@ -23,7 +23,7 @@ from ..tools import get_registry
 def _run_async(coro):
     """Run an async coroutine from a sync context."""
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor() as pool:

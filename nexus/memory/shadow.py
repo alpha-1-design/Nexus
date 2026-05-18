@@ -68,8 +68,8 @@ class ShadowIndexer:
 
     async def _generate_proactive_insights(self):
         """Analyze gathered facts to suggest improvements."""
-        facts = self.memory.get_facts_by_category("coding_patterns")
-        tech = self.memory.get_facts_by_category("tech_stack")
+        self.memory.get_facts_by_category("coding_patterns")
+        self.memory.get_facts_by_category("tech_stack")
 
         insights = []
         # Logic to cross-reference facts

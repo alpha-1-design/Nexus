@@ -618,7 +618,7 @@ class NotificationOverlay(Static):
         self.severity = severity
 
     def compose(self) -> ComposeResult:
-        color = {
+        {
             "info": CSS_COLORS["info"],
             "warning": CSS_COLORS["warning"],
             "error": CSS_COLORS["error"],

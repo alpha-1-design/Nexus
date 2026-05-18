@@ -231,12 +231,12 @@ class PhoneModeFormatter:
         col_widths = [min(w, 30) for w in col_widths]  # Cap at 30 chars
 
         lines = []
-        header_line = " | ".join(h[:w].ljust(w) for h, w in zip(headers, col_widths))
+        header_line = " | ".join(h[:w].ljust(w) for h, w in zip(headers, col_widths, strict=False))
         lines.append(header_line)
         lines.append("-" * len(header_line))
 
         for row in rows:
-            row_line = " | ".join(str(c)[:w].ljust(w) for c, w in zip(row, col_widths))
+            row_line = " | ".join(str(c)[:w].ljust(w) for c, w in zip(row, col_widths, strict=False))
             lines.append(row_line)
 
         return "\n".join(lines)

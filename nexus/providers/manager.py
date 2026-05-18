@@ -109,7 +109,6 @@ class ProviderManager:
         active = provider_name or self.active_provider
         provider_names = [active] + [n for n in self.configs.keys() if n != active]
 
-        last_error = None
         max_retries = 2
 
         for name in provider_names:
@@ -124,16 +123,14 @@ class ProviderManager:
                         self.cost_tracker.add_usage(response.usage, rates)
 
                     return response
-                except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
-                    last_error = e
+                except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
                     if attempt < max_retries:
                         wait = (attempt + 1) * 2
                         print(f"  \033[34m╼\033[0m \033[90mnexus/providers\033[0m \033[33mNetwork error on {name}, retrying in {wait}s...\033[0m")
                         await asyncio.sleep(wait)
                         continue
                     break  # Exhausted retries for this provider
-                except Exception as e:
-                    last_error = e
+                except Exception:
                     cyan = "\033[36m"
                     blue = "\033[34m"
                     dim = "\033[90m"
@@ -143,7 +140,7 @@ class ProviderManager:
                     print(f"  {blue}╼{reset} {dim}Switching fallback...{reset}")
                     break
 
-        raise RuntimeError(f"All providers failed. See logs for details.")
+        raise RuntimeError("All providers failed. See logs for details.")
 
     async def stream(
         self,
