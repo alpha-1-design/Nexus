@@ -138,12 +138,12 @@ class ProviderManager:
                     blue = "\033[34m"
                     dim = "\033[90m"
                     reset = "\033[0m"
-                    print(f"  {blue}╼{reset} {dim}nexus/providers{reset} {cyan}{name}{reset} {dim}failed: {e}{reset}")
+                    print(f"  {blue}╼{reset} {dim}nexus/providers{reset} {cyan}{name}{reset} {dim}failed.{reset}")
                     # traceback.print_exc() # Too verbose for regular use
                     print(f"  {blue}╼{reset} {dim}Switching fallback...{reset}")
                     break
 
-        raise RuntimeError(f"All providers failed. Last error: {last_error}")
+        raise RuntimeError(f"All providers failed. See logs for details.")
 
     async def stream(
         self,
