@@ -113,11 +113,10 @@ class FreeTTSProvider(TTSProvider):
                     audio_resp.raise_for_status()
                     return audio_resp.content
                 except Exception as e:
-                raise NexusError(f"Operation failed: {e}") from e
                     if attempt < max_retries - 1:
                         await asyncio.sleep(1 * (attempt + 1))
                         continue
-                    raise NexusError(f"FreeTTS failed after {max_retries} attempts: {e}")
+                    raise NexusError(f"FreeTTS failed after {max_retries} attempts: {e}") from e
 
     async def stream_speak(self, text: str, config: VoiceConfig) -> AsyncIterator[bytes]:
         audio = await self.speak(text, config)
@@ -150,8 +149,8 @@ class FreeTTSProvider(TTSProvider):
             finally:
                 pa.terminate()
         except Exception as e:
-                raise NexusError(f"Operation failed: {e}") from e
             print(f"[TTS] Audio playback skipped (error): {e}")
+            raise NexusError(f"Operation failed: {e}") from e
 
     def _convert_to_wav(self, audio: bytes) -> bytes:
         audio_io = io.BytesIO(audio)
@@ -195,8 +194,8 @@ class OpenAITTSProvider(TTSProvider):
             stream.close()
             pa.terminate()
         except Exception as e:
-                raise NexusError(f"Operation failed: {e}") from e
             print(f"[TTS] Audio playback skipped: {e}")
+            raise NexusError(f"Operation failed: {e}") from e
 
     def _mp3_to_wav(self, mp3_data: bytes) -> bytes:
         try:
@@ -240,8 +239,7 @@ class SystemTTSProvider(TTSProvider):
             os.unlink(wav_path)
             return data
         except Exception as e:
-                raise NexusError(f"Operation failed: {e}") from e
-            raise RuntimeError(f"No system TTS available: {e}")
+            raise NexusError(f"Operation failed: {e}") from e
 
     async def stream_speak(self, text: str, config: VoiceConfig) -> AsyncIterator[bytes]:
         audio = await self.speak(text, config)
@@ -258,8 +256,8 @@ class SystemTTSProvider(TTSProvider):
             stream.close()
             pa.terminate()
         except Exception as e:
-                raise NexusError(f"Operation failed: {e}") from e
             print(f"[TTS] Audio playback skipped: {e}")
+            raise NexusError(f"Operation failed: {e}") from e
 
 
 # ─────────────────────────────────────────────────────────────
@@ -296,9 +294,8 @@ class STTProvider(ABC):
                 frames_per_buffer=1024,
             )
         except Exception as e:
-                raise NexusError(f"Operation failed: {e}") from e
             p.terminate()
-            raise NexusError(f"Failed to open microphone: {e}")
+            raise NexusError(f"Failed to open microphone: {e}") from e
 
         silence_start = None
         silence_threshold = int(config.silence_threshold)
@@ -359,9 +356,8 @@ class STTProvider(ABC):
                 frames_per_buffer=512,
             )
         except Exception as e:
-                raise NexusError(f"Operation failed: {e}") from e
             p.terminate()
-            raise NexusError(f"Failed to open microphone: {e}")
+            raise NexusError(f"Failed to open microphone: {e}") from e
 
         speech_started = False
         silence_start = None
@@ -590,8 +586,8 @@ class VoiceEngine:
             audio = await self.tts.speak(text, self.config)
             await self.tts.play_audio(audio, self.config)
         except Exception as e:
-                raise NexusError(f"Operation failed: {e}") from e
             print(f"\n[Nexus] Speech Error: {format_error(e)}")
+            raise NexusError(f"Operation failed: {e}") from e
 
     async def transcribe_audio(self, audio: bytes) -> str:
         """Convert audio to text."""
@@ -607,8 +603,8 @@ class VoiceEngine:
                 text = await self.transcribe_audio(audio)
                 return text.strip() if text else None
         except Exception as e:
-                raise NexusError(f"Operation failed: {e}") from e
             print(f"\n[Nexus] Listen Error: {format_error(e)}")
+            raise NexusError(f"Operation failed: {e}") from e
         return None
 
     async def respond_and_speak(self, text: str) -> str:

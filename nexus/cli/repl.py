@@ -1056,7 +1056,7 @@ Available commands:
             print(f"  Providers: {len(self.manager.configs)} configured")
             print(f"  Tools: {len(self.registry.list_all())} available")
             print("  Termux: available")
-            print(f"  Plugins: {len(get_plugin_manager().list_all())} loaded")
+            print(f"  Plugins: {len(self.manager.list_all())} loaded")
             print(f"  Safety rules: {len(self.safety.rules)} loaded")
             print(f"  Learning lessons: {self.learning.get_stats()['total_lessons']}")
             print(f"  Sync endpoints: {len(self.sync_engine.endpoints)}")
@@ -1304,7 +1304,7 @@ Available commands:
             except EOFError:
                 break
             except Exception as e:
-                self.learning.record_failure(str(e), {"type": type(e).__name__}, {"session": self.session.id})
+                self.learning.record_failure("repl_loop", {}, str(e), {"type": type(e).__name__, "session": self.session.id})
                 print(f"{self.personality.failure()} {e}")
 
         self._save_history()
