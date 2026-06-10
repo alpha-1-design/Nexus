@@ -12,11 +12,9 @@ Inspired by: Claude Code's lazy-loading MCP tools, Gemini CLI's ToolRegistry clo
 
 import asyncio
 import json
+import os
 import subprocess
-import sys
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -258,6 +256,3 @@ def mcp_tool_from_server(mcp: MCPClient, server_name: str) -> type[BaseTool]:
             return await self._mcp.call_tool(f"{self._server}/{tool_name}", args)
 
     return MCPAdapterTool
-
-
-import os

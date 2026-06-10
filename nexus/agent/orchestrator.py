@@ -1,7 +1,6 @@
 """Agent orchestrator - the core loop connecting AI, tools, and memory."""
 
 import json
-import os
 import re
 import time
 from collections.abc import Callable
@@ -21,6 +20,7 @@ from ..safety import get_safety_engine
 from ..thinking import ThinkingState, get_thinking_engine
 from ..tools import ToolRegistry, ToolResult
 from ..utils import format_error
+from ..utils.validation import get_tool_failure_hint, run_refiners_fire
 
 
 def estimate_tokens(text: str) -> int:
@@ -160,7 +160,7 @@ class AgentOrchestrator:
         """Unified entry point for decomposing and executing complex tasks."""
         try:
             # 1. Decompose
-            plan = await self.decomposer.decompose(goal)
+            plan = await self.decomposer.decompose(goal, context={}, registry=self.tools)
             self._notify_ui("thinking", {"description": f"Decomposed into {len(plan.steps)} steps"})
 
             # 2. Execute steps
@@ -175,7 +175,7 @@ class AgentOrchestrator:
         except Exception as e:
             error_msg = format_error(e)
             self._notify_ui("error", error_msg)
-            raise NexusError(str(e), user_friendly=error_msg)
+            raise NexusError(str(e), user_friendly=error_msg) from e
 
     @property
     def team(self) -> MultiAgentTeam | None:
@@ -371,7 +371,13 @@ class AgentOrchestrator:
                 validation_passed, validation_error = await self._run_refiners_fire(args.get("path"))
                 if not validation_passed:
                     result.success = False
-                    result.content = f"[REJECTED BY FIRE] The work was performed, but it failed the integrity check:\\n{validation_error}\\n\\n[RECOVERY] I have detected an impurity in the logic. You must fix this error before proceeding."
+                    result.content = (
+                        "[REJECTED BY FIRE] The work was performed, but it "
+                        "failed the integrity check:\n"
+                        f"{validation_error}\n\n[RECOVERY] I have detected an "
+                        "impurity in the logic. You must fix this error "
+                        "before proceeding."
+                    )
 
             if result.success or depth > 0:
                 self._thinking.finish_step(exec_step, result=result.content[:200] if result.content else "")
@@ -396,54 +402,13 @@ class AgentOrchestrator:
 
     async def _run_refiners_fire(self, path: str | None) -> tuple[bool, str | None]:
         """Perform a mandatory integrity check on modified code."""
-        if not path or not os.path.exists(path):
-            return True, None
-        try:
-            if path.endswith(".py"):
-                import ast
-
-                with open(path, encoding="utf-8") as f:
-                    ast.parse(f.read())
-            elif path.endswith(".json"):
-                import json
-
-                with open(path, encoding="utf-8") as f:
-                    json.load(f)
-            elif path.endswith((".yaml", ".yml")):
-                import yaml
-
-                with open(path, encoding="utf-8") as f:
-                    yaml.safe_load(f)
-            return True, None
-        except Exception as e:
-            return False, str(e)
+        return await run_refiners_fire(path)
 
     async def _handle_tool_failure(self, tool_name: str, args: dict, error: str) -> str:
         """Provide deterministic recovery hints for tool failures."""
-        import os
-
+        hint = get_tool_failure_hint(tool_name, args, error)
         user_friendly_error = format_error(error)
-        hint = f"Tool '{tool_name}' failed: {user_friendly_error}"
-        if tool_name == "edit" and "context mismatch" in error.lower():
-            path = args.get("path")
-            old_string = args.get("old_string")
-            if path and os.path.exists(path):
-                with open(path, encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-                if old_string and old_string in content:
-                    lines = content.splitlines()
-                    for i, line in enumerate(lines):
-                        if old_string in line:
-                            context_block = "\n".join(lines[max(0, i - 2) : min(len(lines), i + 3)])
-                            hint += f"\n\n[RECOVERY HINT] 'old_string' was found at line {i + 1}, but context mismatch occurred. Here is the actual context in the file:\n{context_block}"
-                            break
-                else:
-                    hint += "\n\n[RECOVERY HINT] 'old_string' was NOT found in the file at all. Please use the 'read' tool to verify the current file content."
-        elif tool_name == "bash" and "not found" in error.lower():
-            hint += "\n\n[RECOVERY HINT] The command was not found. If this is a new tool, you might need to install it via 'apt install' or 'pip install'. In Termux, try 'pkg install'."
-        elif "file not found" in error.lower() or "no such file" in error.lower():
-            hint += "\n\n[RECOVERY HINT] Verify the path exists using 'list' or 'glob'. Paths should usually be relative to the project root."
-        return hint
+        return f"Tool '{tool_name}' failed: {user_friendly_error}\n{hint}"
 
     async def _reflect_on_failure(self, tool_name: str, args: dict, error: str) -> dict[str, Any]:
         """Ask the AI to suggest fixes for a failed tool call."""

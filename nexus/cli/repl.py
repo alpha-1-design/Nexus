@@ -21,6 +21,8 @@ from ..sync import get_sync_engine
 from ..thinking import ThinkingState, get_thinking_engine
 from ..tools import ToolResult
 from ..ui import ProgressTracker
+from ..utils.validation import get_tool_failure_hint, run_refiners_fire
+from ..voice import get_voice_engine
 
 
 class REPL:
@@ -335,6 +337,75 @@ When using tools, always provide clear feedback about what you're doing.
             lines.append(f"- {tool.name}: {tool.description}")
         return "\n".join(lines)
 
+    async def _execute_single_tool(self, tool_call, exec_step) -> ToolResult:
+        """Execute a single tool with safety checks, Refiner's Fire, and failure handling."""
+        tool = self.registry.get(tool_call.name)
+        if not tool:
+            self.thinking_engine.finish_step(exec_step, error=f"Unknown tool: {tool_call.name}")
+            return ToolResult(success=False, content="", error=f"Unknown tool: {tool_call.name}")
+
+        proceed, error_result = self._check_tool_safety(tool_call.name, tool_call.arguments)
+        if not proceed:
+            result = error_result
+        else:
+            if tool_call.name == "Read":
+                for path_key in ("path", "filePath", "file_path"):
+                    if path_key in tool_call.arguments:
+                        self.safety.mark_file_read(tool_call.arguments[path_key])
+                        break
+
+            if tool_call.name in ("write", "edit"):
+                self._show_kinetic_stream(tool_call.arguments.get("path", "file"))
+
+            result = await tool.execute(**tool_call.arguments)
+
+            if result.success and tool_call.name in ("write", "edit"):
+                validation_passed, validation_error = await self._run_refiners_fire(
+                    tool_call.arguments.get("path")
+                )
+                if not validation_passed:
+                    result.success = False
+                    result.content = (
+                        "[REJECTED BY FIRE] The work was performed, but it "
+                        "failed the integrity check:\n"
+                        f"{validation_error}\n\n[RECOVERY] I have detected an "
+                        "impurity in the logic. You must fix this error "
+                        "before proceeding."
+                    )
+
+            if not result.success:
+                result.content = await self._handle_tool_failure(
+                    tool_call.name, tool_call.arguments, result.error or result.content
+                )
+
+        if not result.success:
+            self.learning.record_failure(
+                tool_name=tool_call.name,
+                args=tool_call.arguments,
+                error=result.error or result.content,
+                context={"session": self.session.id},
+            )
+
+        self.thinking_engine.finish_step(
+            exec_step,
+            result=result.content[:200] if result.content else "",
+        )
+
+        if result.success:
+            prefix = f"\n{self.personality.success()} "
+        else:
+            prefix = f"\n{self.personality.failure()} "
+        preview = result.content[:200]
+        print(
+            f"{prefix}{preview}..." if len(result.content) > 200
+            else f"{prefix}{result.content}"
+        )
+
+        if tool_call.name not in self.session.tools_used:
+            self.session.tools_used.append(tool_call.name)
+
+        return result
+
     async def _generate_response(self, user_input: str, print_result: bool = True) -> str:
         """Generate a response from the AI with dynamic context pulsing."""
         # Check for proactive insights if user is 'free' (idle/short input)
@@ -363,7 +434,7 @@ When using tools, always provide clear feedback about what you're doing.
         tools = self.registry.to_openai_format()
 
         try:
-            if self.streaming and not tools:
+            if self.streaming:
                 response_text = ""
                 tool_results = []
 
@@ -382,69 +453,11 @@ When using tools, always provide clear feedback about what you're doing.
                             tool_name=tool_call.name,
                             tool_args=tool_call.arguments,
                         )
-                        tool = self.registry.get(tool_call.name)
-                        if tool:
-                            proceed, error_result = self._check_tool_safety(tool_call.name, tool_call.arguments)
-                            if not proceed:
-                                result = error_result
-                            else:
-                                if tool_call.name == "Read":
-                                    for path_key in ("path", "filePath", "file_path"):
-                                        if path_key in tool_call.arguments:
-                                            self.safety.mark_file_read(tool_call.arguments[path_key])
-                                            break
-
-                                # Visual Kinetic Write for file writes
-                                if tool_call.name == "write" or tool_call.name == "edit":
-                                    self._show_kinetic_stream(tool_call.arguments.get("path", "file"))
-
-                                result = await tool.execute(**tool_call.arguments)
-
-                                # THE REFINER'S FIRE: Post-Execution Validation
-                                if result.success and tool_call.name in ("write", "edit"):
-                                    validation_passed, validation_error = await self._run_refiners_fire(tool_call.arguments.get("path"))
-                                    if not validation_passed:
-                                        result.success = False
-                                        result.content = f"[REJECTED BY FIRE] The work was performed, but it failed the integrity check:\n{validation_error}\n\n[RECOVERY] I have detected an impurity in the logic. You must fix this error before proceeding."
-
-                                if not result.success:
-                                    result.content = await self._handle_tool_failure(tool_call.name, tool_call.arguments, result.error or result.content)
-                            tool_results.append((tool_call, result))
-                            if not result.success:
-                                self.learning.record_failure(
-                                    tool_name=tool_call.name,
-                                    args=tool_call.arguments,
-                                    error=result.error or result.content,
-                                    context={"session": self.session.id},
-                                )
-                            self.thinking_engine.finish_step(
-                                exec_step,
-                                result=result.content[:200] if result.content else "",
-                            )
-                            if result.success:
-                                prefix = f"\n{self.personality.success()} "
-                            else:
-                                prefix = f"\n{self.personality.failure()} "
-                            preview = result.content[:200]
-                            print(f"{prefix}{preview}..." if len(result.content) > 200 else f"{prefix}{result.content}")
-
-                            # Add tool result as message
-                            messages.append(
-                                Message(
-                                    role="tool",
-                                    content=result.content,
-                                    name=tool_call.name,
-                                    tool_call_id=tool_call.id,
-                                )
-                            )
-
-                            # Record tool usage
-                            if chunk.tool_call.name not in self.session.tools_used:
-                                self.session.tools_used.append(chunk.tool_call.name)
+                        tool_result = await self._execute_single_tool(tool_call, exec_step)
+                        tool_results.append((tool_call, tool_result))
 
                 print()  # Newline after streaming
 
-                # If tools were called, send results back and get final response
                 if tool_results:
                     for tc, res in tool_results:
                         messages.append(
@@ -461,70 +474,44 @@ When using tools, always provide clear feedback about what you're doing.
                         cyan = "\033[36m"
                         reset = "\033[0m"
                         print(f"\n{cyan}◈{reset} {final_content}")
-                    streaming_done = True
                     return final_content
                 else:
-                    final_content = response_text
-                    streaming_done = True
                     return response_text
 
             else:
                 response = await self.manager.complete(messages, tools)
+                tool_results = []
 
-                # Handle tool calls
                 for tool_call in response.tool_calls:
-                    tool = self.registry.get(tool_call.name)
-                    if tool:
-                        proceed, error_result = self._check_tool_safety(tool_call.name, tool_call.arguments)
-                        if not proceed:
-                            result = error_result
-                        else:
-                            if tool_call.name == "Read":
-                                for path_key in ("path", "filePath", "file_path"):
-                                    if path_key in tool_call.arguments:
-                                        self.safety.mark_file_read(tool_call.arguments[path_key])
-                                        break
+                    exec_step = self.thinking_engine.start_step(
+                        ThinkingState.EXECUTING,
+                        f"Calling tool: {tool_call.name}",
+                        tool_name=tool_call.name,
+                        tool_args=tool_call.arguments,
+                    )
+                    tool_result = await self._execute_single_tool(tool_call, exec_step)
+                    tool_results.append((tool_call, tool_result))
 
-                            # Visual Kinetic Write
-                            if tool_call.name == "write" or tool_call.name == "edit":
-                                self._show_kinetic_stream(tool_call.arguments.get("path", "file"))
-
-                            result = await tool.execute(**tool_call.arguments)
-                            if not result.success:
-                                result.content = await self._handle_tool_failure(tool_call.name, tool_call.arguments, result.error or result.content)
-                        if not result.success:
-                            self.learning.record_failure(
-                                tool_name=tool_call.name,
-                                args=tool_call.arguments,
-                                error=result.error or result.content,
-                                context={"session": self.session.id},
-                            )
-
-                        # Add assistant's tool_call message to history
-                        messages.append(Message(role="assistant", content=response.content, tool_calls=[tool_call]))
-
-                        # Add tool result message
+                if tool_results:
+                    for tc, res in tool_results:
                         messages.append(
                             Message(
                                 role="tool",
-                                content=result.content,
-                                name=tool_call.name,
-                                tool_call_id=tool_call.id,
+                                content=res.content,
+                                name=tc.name,
+                                tool_call_id=tc.id,
                             )
                         )
+                    final_response = await self.manager.complete(messages, tools)
+                    final_content = final_response.content
+                else:
+                    final_content = response.content
 
-                # Get final response (may be after tool results)
-                response = await self.manager.complete(messages, tools)
-                final_content = response.content
                 if print_result and final_content:
                     cyan = "\033[36m"
                     reset = "\033[0m"
                     print(f"\n{cyan}◈{reset} {final_content}")
-                streaming_done = False
                 return final_content
-
-            if print_result and final_content and not streaming_done:
-                print(final_content)
 
             self.memory.save_session(self.session)
             return final_content
@@ -618,94 +605,16 @@ When using tools, always provide clear feedback about what you're doing.
 
     async def _run_refiners_fire(self, path: str | None) -> tuple[bool, str | None]:
         """Perform a mandatory integrity check on modified code (The Refiner's Fire)."""
-        if not path or not os.path.exists(path):
-            return True, None
-
-        green = "\033[32m"
-        reset = "\033[0m"
-
-        # 1. Syntax Check (The first test of fire)
-        if path.endswith(".py"):
-            try:
-                import ast
-
-                with open(path, encoding="utf-8") as f:
-                    ast.parse(f.read())
-            except SyntaxError as e:
-                return False, f"Syntax Error: {e.msg} (line {e.lineno})"
-            except Exception as e:
-                return False, str(e)
-
-        # 1. Syntax Check (The first test of fire)
-        if path.endswith(".py"):
-            try:
-                import ast
-
-                with open(path, encoding="utf-8") as f:
-                    ast.parse(f.read())
-            except SyntaxError as e:
-                return False, f"Syntax Error: {e.msg} (line {e.lineno})"
-            except Exception as e:
-                return False, str(e)
-
-        elif path.endswith(".json"):
-            # 2. JSON Validation
-            try:
-                import json
-
-                with open(path, encoding="utf-8") as f:
-                    json.load(f)
-            except Exception as e:
-                return False, f"Invalid JSON: {str(e)}"
-
-        elif path.endswith((".yaml", ".yml")):
-            # 3. YAML Validation
-            try:
-                import yaml
-
-                with open(path, encoding="utf-8") as f:
-                    yaml.safe_load(f)
-            except Exception as e:
-                return False, f"Invalid YAML: {str(e)}"
-
-        print(f" {green}STOOD THE FIRE{reset}")
-        return True, None
-        return True, None
+        passed, error = await run_refiners_fire(path)
+        if passed:
+            green = "\033[32m"
+            reset = "\033[0m"
+            print(f" {green}STOOD THE FIRE{reset}")
+        return passed, error
 
     async def _handle_tool_failure(self, tool_name: str, arguments: dict, error: str) -> str:
         """Perform automatic diagnostics and recovery hints for tool failures."""
-        import os
-
-        hint = f"Error: {error}"
-
-        # 1. Edit Tool Context Mismatch
-        if tool_name == "edit" and "context mismatch" in error.lower():
-            path = arguments.get("path")
-            old_string = arguments.get("old_string")
-            if path and os.path.exists(path):
-                with open(path, encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-
-                # Check if old_string exists without context
-                if old_string and old_string in content:
-                    lines = content.splitlines()
-                    for i, line in enumerate(lines):
-                        if old_string in line:
-                            context_block = "\n".join(lines[max(0, i - 2) : min(len(lines), i + 3)])
-                            hint += f"\n\n[RECOVERY HINT] 'old_string' was found at line {i + 1}, but context mismatch occurred. Here is the actual context in the file:\n{context_block}"
-                            break
-                else:
-                    hint += "\n\n[RECOVERY HINT] 'old_string' was NOT found in the file at all. Please use the 'read' tool to verify the current file content."
-
-        # 2. Bash Tool Command Not Found
-        elif tool_name == "bash" and "not found" in error.lower():
-            hint += "\n\n[RECOVERY HINT] The command was not found. If this is a new tool, you might need to install it via 'apt install' or 'pip install'. In Termux, try 'pkg install'."
-
-        # 3. File Not Found
-        elif "file not found" in error.lower() or "no such file" in error.lower():
-            hint += "\n\n[RECOVERY HINT] Verify the path exists using 'list' or 'glob'. Paths should usually be relative to the project root."
-
-        return hint
+        return get_tool_failure_hint(tool_name, arguments, error)
 
     def _handle_command(self, line: str) -> bool:
         """Handle a slash command. Returns True if handled."""
@@ -1015,7 +924,40 @@ Available commands:
             return True
 
         elif cmd == "mcp":
-            print("MCP: use 'nexus mcp list/add/remove' from CLI")
+            from pathlib import Path
+
+            from ..mcp import MCPClient, MCPServerConfig
+
+            parts = args.split(maxsplit=1) if args else []
+            sub = parts[0] if parts else "list"
+
+            if sub == "list":
+                client = MCPClient()
+                config_path = Path.home() / ".nexus" / "mcp-servers.json"
+                if config_path.exists():
+                    import json
+                    servers = json.loads(config_path.read_text())
+                    for name, cfg in servers.items():
+                        print(f"\n  {name} ({cfg.get('transport', 'stdio')})")
+                        try:
+                            client.add_server(MCPServerConfig(name=name, **cfg))
+                            import asyncio
+                            asyncio.run(client.initialize_server(name))
+                            tools = [t for t in client.list_tools() if t.server_name == name]
+                            for t in tools:
+                                print(f"    → {t.name}: {t.description or 'No description'}")
+                        except Exception as e:
+                            print(f"    Error: {e}")
+                else:
+                    print("No MCP servers configured.")
+                import asyncio
+                asyncio.run(client.close())
+            elif sub == "add" and len(parts) > 1:
+                print("Use: nexus mcp add <name> --command <cmd>")
+            elif sub == "remove" and len(parts) > 1:
+                print("Use: nexus mcp remove <name>")
+            else:
+                print("Usage: /mcp list|add|remove")
             return True
 
         elif cmd == "plugin":
@@ -1107,11 +1049,11 @@ Available commands:
                 lessons = self.learning._load_all_lessons()[:5]
                 if not lessons:
                     print("No lessons yet. Keep building!")
-                for l in lessons:
-                    rate = l.success_count / max(1, l.success_count + l.failure_count)
-                    print(f"\n  [{l.lesson_id}] {l.title}")
-                    print(f"    {l.summary[:80]}...")
-                    print(f"    Success: {rate:.0%} | Triggers: {', '.join(l.trigger_conditions[:2])}")
+                for lesson in lessons:
+                    rate = lesson.success_count / max(1, lesson.success_count + lesson.failure_count)
+                    print(f"\n  [{lesson.lesson_id}] {lesson.title}")
+                    print(f"    {lesson.summary[:80]}...")
+                    print(f"    Success: {rate:.0%} | Triggers: {', '.join(lesson.trigger_conditions[:2])}")
             elif sub == "failures":
                 import json
 

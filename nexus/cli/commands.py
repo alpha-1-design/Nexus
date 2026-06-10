@@ -11,6 +11,7 @@ from nexus import __version__
 from nexus.config import NexusConfig, save_config
 from nexus.providers import Message, get_manager
 from nexus.tools import get_registry
+from nexus.voice import get_voice_engine, list_tts_voices
 
 
 @click.group()
@@ -632,7 +633,6 @@ def setup_cmd(
         provider = config.active_provider
         # We also need the model and api_key from the config since manager.run() updated it
         model = config.providers[provider].model
-        config.providers[provider].api_key
 
         click.echo("\n[+] Setup complete!\n")
         print_cheatsheet(provider, model, is_termux)
@@ -1154,6 +1154,95 @@ def automation_install_browser(browser: str, with_deps: bool) -> None:
     else:
         click.echo(f"[-] Installation failed (exit code: {result.returncode})")
         click.echo(f"  Try: playwright install {browser} --with-deps")
+
+
+# MCP commands
+@cli.group()
+def mcp():
+    """Manage MCP (Model Context Protocol) servers."""
+    pass
+
+
+@mcp.command("list")
+def mcp_list():
+    """List configured MCP servers and their tools."""
+    from nexus.mcp import MCPClient, MCPServerConfig
+
+    client = MCPClient()
+    config_path = Path.home() / ".nexus" / "mcp-servers.json"
+    if config_path.exists():
+        import json
+        servers = json.loads(config_path.read_text())
+        for name, cfg in servers.items():
+            click.echo(f"\n  {name} ({cfg.get('transport', 'stdio')})")
+            click.echo(f"    Command: {cfg.get('command', cfg.get('url', 'N/A'))}")
+            try:
+                client.add_server(MCPServerConfig(name=name, **cfg))
+                import asyncio
+                asyncio.run(client.initialize_server(name))
+                tools = [t for t in client.list_tools() if t.server_name == name]
+                for t in tools:
+                    click.echo(f"    → {t.name}: {t.description or 'No description'}")
+            except Exception as e:
+                click.echo(f"    Error: {e}")
+    else:
+        click.echo("No MCP servers configured.")
+        click.echo(f"  Create {config_path} or use 'nexus mcp add'.")
+
+
+@mcp.command("add")
+@click.argument("name")
+@click.option("--command", help="Command to run (stdio transport)")
+@click.option("--args", help="Space-separated arguments")
+@click.option("--url", help="URL for SSE transport")
+@click.option("--transport", default="stdio", type=click.Choice(["stdio", "sse"]))
+def mcp_add(name: str, command: str | None, args: str | None, url: str | None, transport: str):
+    """Add an MCP server configuration."""
+    import json
+
+    config_path = Path.home() / ".nexus" / "mcp-servers.json"
+    servers = {}
+    if config_path.exists():
+        servers = json.loads(config_path.read_text())
+
+    cfg = {"transport": transport}
+    if transport == "stdio":
+        if not command:
+            click.echo("--command is required for stdio transport", err=True)
+            return
+        cfg["command"] = command
+        if args:
+            cfg["args"] = args.split()
+    else:
+        if not url:
+            click.echo("--url is required for SSE transport", err=True)
+            return
+        cfg["url"] = url
+
+    servers[name] = cfg
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(servers, indent=2))
+    click.echo(f"Added MCP server: {name}")
+
+
+@mcp.command("remove")
+@click.argument("name")
+def mcp_remove(name: str):
+    """Remove an MCP server configuration."""
+    import json
+
+    config_path = Path.home() / ".nexus" / "mcp-servers.json"
+    if not config_path.exists():
+        click.echo("No MCP servers configured.", err=True)
+        return
+
+    servers = json.loads(config_path.read_text())
+    if name in servers:
+        del servers[name]
+        config_path.write_text(json.dumps(servers, indent=2))
+        click.echo(f"Removed MCP server: {name}")
+    else:
+        click.echo(f"MCP server not found: {name}", err=True)
 
 
 # Initialize providers from config
