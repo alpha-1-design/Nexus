@@ -100,9 +100,9 @@ class ShadowIndexer:
                 continue
 
             # Analyze patterns (indentation, naming conventions, imports)
-            await self._analyze_file_style(path)
+            await self._analyze_single_file(path)
 
-    async def _analyze_file_style(self, path: str):
+    async def _analyze_single_file(self, path: str):
         """Infer style facts from a file."""
         try:
             with open(path, encoding="utf-8", errors="replace") as f:

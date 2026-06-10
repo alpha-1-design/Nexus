@@ -25,6 +25,22 @@ from ..utils.validation import get_tool_failure_hint, run_refiners_fire
 from ..voice import get_voice_engine
 
 
+def _style(text: str, fg: str = "", bold: bool = False) -> str:
+    """Simple ANSI styling helper."""
+    colors = {
+        "green": "\033[32m",
+        "red": "\033[31m",
+        "cyan": "\033[36m",
+        "yellow": "\033[33m",
+        "bright_black": "\033[90m",
+        "white": "\033[97m",
+    }
+    reset = "\033[0m"
+    code = colors.get(fg, "")
+    b = "\033[1m" if bold else ""
+    return f"{b}{code}{text}{reset}" if code or bold else text
+
+
 class REPL:
     """Interactive REPL for Nexus."""
 
@@ -63,6 +79,15 @@ class REPL:
         # Register thinking callback
         self.thinking_engine = get_thinking_engine()
         self.thinking_engine.on_update(self._on_thinking_update)
+
+        # Tracked state
+        self._tool_call_count = 0
+        self._plan_active = False
+        self._plan_mode = None
+        self._first_token_received = False
+        self._last_failed_tool: tuple[str, dict, str] | None = None
+        self._retry_stack: list[tuple[str, dict, str]] = []
+        self._undo_stack: list[int] = []
 
     async def _ensure_provider(self) -> None:
         """Ensure a working provider is configured. Auto-setup OpenCode Zen if needed."""
@@ -189,7 +214,28 @@ class REPL:
         return True, None
 
     def _setup_readline(self) -> None:
-        """Configure readline for better editing."""
+        """Configure readline with slash-command tab completion."""
+        # All slash commands for tab completion
+        self._slash_commands = [
+            "/exit", "/quit", "/clear", "/history", "/tools",
+            "/model", "/stream", "/facts", "/fact", "/session",
+            "/save", "/sessions", "/load", "/voice", "/spawn",
+            "/agents", "/kill", "/team", "/plan", "/build",
+            "/abort", "/think", "/safety", "/doctor", "/mcp",
+            "/plugin", "/sync", "/learn", "/improve", "/reflect",
+            "/skills", "/skill", "/providers", "/models",
+            "/context", "/stats", "/retry", "/undo", "/diff",
+            "/status", "/phone", "/partner", "/help",
+        ]
+
+        def completer(text: str, state: int) -> str | None:
+            if text.startswith("/"):
+                candidates = [cmd for cmd in self._slash_commands if cmd.startswith(text)]
+                if state < len(candidates):
+                    return candidates[state] + " "
+            return None
+
+        readline.set_completer(completer)
         readline.parse_and_bind("tab: complete")
         readline.parse_and_bind("set editing-mode vi")
 
@@ -385,6 +431,8 @@ When using tools, always provide clear feedback about what you're doing.
                 error=result.error or result.content,
                 context={"session": self.session.id},
             )
+            self._last_failed_tool = (tool_call.name, tool_call.arguments, result.error or result.content)
+            self._retry_stack.append(self._last_failed_tool)
 
         self.thinking_engine.finish_step(
             exec_step,
@@ -616,7 +664,7 @@ When using tools, always provide clear feedback about what you're doing.
         """Perform automatic diagnostics and recovery hints for tool failures."""
         return get_tool_failure_hint(tool_name, arguments, error)
 
-    def _handle_command(self, line: str) -> bool:
+    async def _handle_command(self, line: str) -> bool:
         """Handle a slash command. Returns True if handled."""
         if not line.startswith("/"):
             return False
@@ -631,30 +679,51 @@ When using tools, always provide clear feedback about what you're doing.
             return True
 
         elif cmd == "help" or cmd == "h":
-            print("""
-Available commands:
-  /exit, /quit     Exit the REPL
-  /clear           Clear conversation
-  /history         Show message history
-  /tools           List available tools
-  /model <name>    Switch model
-  /stream          Toggle streaming mode
-  /facts           Show stored facts
-  /fact <text>     Add a persistent fact
-  /session         Show current session info
-  /save            Save current session
-  /sessions        List saved sessions
-  /load <id>       Load a saved session
-  /voice           Enter voice mode (Nexus speaks & listens)
-  /spawn <role>    Spawn a team agent (coder, reviewer, tester, researcher)
-  /plan, /p        Enter plan mode for a task
-  /build           Execute approved plan steps
-  /safety <mode>   Set safety mode (user_review, read_only, strict, auto_git, sensitive, sandbox, unrestricted)
-  /doctor          Run system diagnostics
-  /sync status     Sync status / push / pull
-  /learn stats     Learning system stats
-  /help            Show this help
-""")
+            cyan = "\033[36m"
+            dim = "\033[90m"
+            green = "\033[32m"
+            reset = "\033[0m"
+            print(f"""
+{cyan}  ╔══════════════════════════════════════════════════════╗{reset}
+{cyan}  ║{reset}  {green}NEXUS — Available Commands{reset}              {cyan}║{reset}
+{cyan}  ╠══════════════════════════════════════════════════════╣{reset}""")
+            commands = [
+                ("/exit, /quit", "Exit the REPL"),
+                ("/help, /h", "Show this help"),
+                ("/clear", "Clear conversation"),
+                ("/history", "Show message history"),
+                ("/tools", "List available tools"),
+                ("/model <name>", "Switch model"),
+                ("/stream", "Toggle streaming mode"),
+                ("/facts", "Show stored facts"),
+                ("/fact <text>", "Add a persistent fact"),
+                ("/session", "Show current session info"),
+                ("/save", "Save current session"),
+                ("/sessions", "List saved sessions"),
+                ("/load <id>", "Load a saved session"),
+                ("/voice", "Enter voice mode"),
+                ("/spawn <role>", "Spawn a team agent"),
+                ("/plan, /p", "Enter plan mode"),
+                ("/build", "Execute approved plan"),
+                ("/safety <mode>", "Set safety mode"),
+                ("/doctor", "Run system diagnostics"),
+                ("/sync", "Sync status/push/pull"),
+                ("/learn", "Learning system stats"),
+                ("/improve", "Self-improvement"),
+                ("/skills", "List available skills"),
+                ("/skill <name>", "Activate a skill"),
+                ("/providers", "List configured providers"),
+                ("/models", "List available models"),
+                ("/context", "Show memory context"),
+                ("/stats", "Show session statistics"),
+                ("/reflect", "Session reflection"),
+                ("/mcp", "MCP server management"),
+                ("/plugin", "Plugin management"),
+            ]
+            for cmd, desc in commands:
+                print(f"{cyan}  ║{reset}  {dim}{cmd:<20}{reset} {desc:<30} {cyan}║{reset}")
+            print(f"{cyan}  ╚══════════════════════════════════════════════════════╝{reset}")
+            print(f"  {dim}Tab-complete commands by typing / and pressing Tab{reset}")
             return True
 
         elif cmd == "safety":
@@ -882,15 +951,65 @@ Available commands:
             return True
 
         elif cmd == "retry":
-            print("Retry: not yet implemented (last failed tool)")
+            if not self._last_failed_tool:
+                print("  No failed tool to retry.")
+                return True
+            tool_name, tool_args, error = self._last_failed_tool
+            print(f"  Retrying {tool_name} (last error: {error[:60]}...)")
+            tool = self.registry.get(tool_name)
+            if not tool:
+                print(f"  Tool '{tool_name}' not available")
+                return True
+            result = await tool.execute(**tool_args)
+            if result.success:
+                print(f"  {_style('✔', 'green')} Retry succeeded")
+                self._last_failed_tool = None
+            else:
+                print(f"  {_style('✘', 'red')} Retry failed: {result.error or result.content[:100]}")
             return True
 
         elif cmd == "undo":
-            print("Undo: not yet implemented")
+            if len(self.messages) < 2:
+                print("  Nothing to undo.")
+                return True
+            user_msg = self.messages.pop()
+            asst_msg = self.messages.pop()
+            self._undo_stack.append(len(self.session.messages))
+            self.session.messages = self.session.messages[:-2]
+            print(f"  {_style('↩', 'yellow')} Undid last exchange ({len(self.messages)} messages remain)")
             return True
 
         elif cmd == "diff":
-            print("Diff: not yet implemented (requires git integration)")
+            import subprocess
+            result = subprocess.run(
+                ["git", "diff", "--stat"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                print("  Not a git repository or git not available.")
+                return True
+            if result.stdout.strip():
+                print(f"\n  {_style('Uncommitted changes:', 'cyan', bold=True)}")
+                print(f"  {_style('─' * 50, 'bright_black')}")
+                print(result.stdout)
+                detail = subprocess.run(
+                    ["git", "diff"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if detail.stdout.strip():
+                    for line in detail.stdout.split("\n")[:80]:
+                        if line.startswith("+"):
+                            print(f"  {_style(line, 'green')}")
+                        elif line.startswith("-"):
+                            print(f"  {_style(line, 'red')}")
+                        elif line.startswith("@@"):
+                            print(f"  {_style(line, 'cyan')}")
+                        else:
+                            print(f"  {line}")
+                    if len(detail.stdout.split("\n")) > 80:
+                        print(f"  {_style('... truncated to 80 lines', 'bright_black')}")
+            else:
+                print(f"  {_style('No uncommitted changes.', 'bright_black')}")
             return True
 
         elif cmd == "status":
@@ -991,16 +1110,10 @@ Available commands:
             return True
 
         elif cmd == "doctor":
-            print("\n[DIAGNOSTICS]")
-            print("  Config: /root/.nexus/config.json exists")
-            print(f"  Providers: {len(self.manager.configs)} configured")
-            print(f"  Tools: {len(self.registry.list_all())} available")
-            print("  Termux: available")
-            print(f"  Plugins: {len(self.manager.list_all())} loaded")
-            print(f"  Safety rules: {len(self.safety.rules)} loaded")
-            print(f"  Learning lessons: {self.learning.get_stats()['total_lessons']}")
-            print(f"  Sync endpoints: {len(self.sync_engine.endpoints)}")
-            print(f"  Improvements pending: {len(self.improver.get_improvement_queue())}")
+            from ..doctor import NexusDoctor
+            doctor = NexusDoctor()
+            report = doctor.run_all()
+            doctor.print_report(report)
             return True
 
         # --- SYNC commands ---
@@ -1105,41 +1218,13 @@ Available commands:
                 print("Usage: /improve queue|approve <id>|apply <id>|run|reject <id>")
             return True
 
-        # --- SAFETY commands ---
-        elif cmd == "safety":
-            parts = args.split(maxsplit=1) if args else []
-            sub = parts[0] if parts else "status"
-
-            if sub == "status":
-                print(f"\nSafety: {'STRICT' if self.safety._strict_mode else 'PERMISSIVE'}")
-                print(f"Rules loaded: {len(self.safety.rules)}")
-                print(f"Violations this session: {len(self.safety._violations)}")
-                print(f"Files read: {len(self.safety.get_read_files())}")
-                print(f"\nViolation summary:\n{self.safety.get_violation_summary()}")
-            elif sub == "strict":
-                self.safety.enable_strict_mode()
-                print("Strict mode enabled — warnings become blocks")
-            elif sub == "permissive":
-                self.safety.disable_strict_mode()
-                print("Permissive mode — warnings are suggestions only")
-            elif sub == "rules":
-                for _rid, rule in list(self.safety.rules.items())[:10]:
-                    print(f"  [{rule.level.name}] {rule.name}: {rule.description[:50]}")
-            else:
-                print("Usage: /safety status|strict|permissive|rules")
-            return True
-
         # --- PHONE mode ---
         elif cmd == "phone":
             if self.phone.enabled:
                 print(f"Phone mode: ON ({self.phone.profile.name})")
             else:
                 print("Phone mode: OFF. Set NEXUS_PHONE_MODE=1 to enable.")
-
-        # --- REFLECTION ---
-        elif cmd == "reflect":
-            print(self.personality.reflection_ask())
-            print(self.learning.ask_reflection())
+            return True
 
         # --- PARTNER ---
         elif cmd == "partner":
@@ -1147,6 +1232,7 @@ Available commands:
             print(f"Mode: {self.personality.config.mode.name}")
             print(f"Celebrate wins: {self.personality.config.celebrate_wins}")
             print(f"Proactive: {self.personality.config.proactive_suggestions}")
+            return True
 
         return False
 
@@ -1210,19 +1296,19 @@ Available commands:
 
     def _get_prompt(self) -> str:
         """Return the current REPL prompt."""
-        return "\n  nexus> "
+        from ..providers import get_manager
+        mgr = get_manager()
+        provider = mgr.active_provider
+        from ..ui import prompt_line
+        return prompt_line(provider=provider)
+
 
     async def run(self) -> None:
         """Run the REPL."""
-        greeting = self.personality.greet()
-        print(f"""
-╔══════════════════════════════════════════════════════════╗
-║                    Nexus AI Agent                        ║
-║                                                           ║
-║  {greeting:<53} ║
-║  Type /help for commands, or just start chatting.         ║
-╚══════════════════════════════════════════════════════════╝
-""")
+        self._setup_readline()
+
+        from ..cli.welcome import display_welcome
+        display_welcome()
 
         while self.running:
             try:
@@ -1232,7 +1318,7 @@ Available commands:
                     continue
 
                 # Handle slash commands
-                if self._handle_command(line):
+                if await self._handle_command(line):
                     continue
 
                 # Handle regular input

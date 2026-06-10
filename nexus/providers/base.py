@@ -44,6 +44,7 @@ class Message:
     content: str
     name: str | None = None
     tool_call_id: str | None = None
+    tool_calls: list | None = None
 
 
 @dataclass

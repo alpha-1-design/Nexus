@@ -65,6 +65,9 @@ class NexusConfig:
     brave_api_key: str | None = None
     exa_api_key: str | None = None
 
+    # Personalisation
+    user_name: str = ""
+
     # Termux-specific
     termux_mode: bool = False
     clipboard_tool: str = "termux-clipboard-set"
@@ -88,6 +91,7 @@ class NexusConfig:
             "sandbox_mode": self.sandbox_mode,
             "tool_profile": self.tool_profile,
             "search_provider": self.search_provider,
+            "user_name": self.user_name,
             "tavily_api_key": self.tavily_api_key,
             "brave_api_key": self.brave_api_key,
             "exa_api_key": self.exa_api_key,
@@ -115,6 +119,7 @@ class NexusConfig:
         config.sandbox_mode = data.get("sandbox_mode", "off")
         config.tool_profile = data.get("tool_profile", "coding")
         config.search_provider = data.get("search_provider", "exa")
+        config.user_name = data.get("user_name", "")
         config.tavily_api_key = data.get("tavily_api_key")
         config.brave_api_key = data.get("brave_api_key")
         config.exa_api_key = data.get("exa_api_key")

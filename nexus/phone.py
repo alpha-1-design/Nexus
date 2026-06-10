@@ -165,7 +165,7 @@ class PhoneModeFormatter:
 
     def code(self, code: str) -> str:
         """Compact code block."""
-        lines = [f"| {self.wrap(l)}" for l in code.split("\n")]
+        lines = [f"| {self.wrap(item)}" for item in code.split("\n")]
         return "\n".join(lines)
 
     def success(self, message: str) -> str:

@@ -96,7 +96,7 @@ class ExecutionEngine:
         self,
         registry: Any,
         tool_executor: Callable[..., Coroutine[Any, Any, ToolResult]],
-        llm_callback: Callable[[str], Coroutine[Any, Any, str]] | None = None,
+        llm_callback: Callable[..., Coroutine[Any, Any, str]] | None = None,
         provider_manager: Any = None,
     ):
         self.registry = registry

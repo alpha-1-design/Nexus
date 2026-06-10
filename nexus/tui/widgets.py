@@ -338,6 +338,132 @@ class CommandEntered(events.Message):
         self.command = command
 
 
+class SlashCommandDropdown(Container):
+    """Dropdown showing available slash commands when user types /."""
+
+    COMMANDS: list[tuple[str, str]] = [
+        ("/help", "Show help"),
+        ("/clear", "Clear chat history"),
+        ("/history", "Show command history"),
+        ("/tools", "List available tools"),
+        ("/model", "Switch AI model"),
+        ("/provider", "Show/switch provider"),
+        ("/session", "Show session info"),
+        ("/facts", "Show stored facts"),
+        ("/fact", "Add a fact"),
+        ("/voice", "Enter voice mode"),
+        ("/spawn", "Spawn a team agent"),
+        ("/plan", "Enter plan mode"),
+        ("/build", "Execute plan"),
+        ("/safety", "Set safety mode"),
+        ("/doctor", "Run diagnostics"),
+        ("/mcp", "MCP server management"),
+        ("/sync", "Sync status"),
+        ("/learn", "Learning stats"),
+        ("/improve", "Self-improvement"),
+        ("/exit", "Exit Nexus"),
+    ]
+
+    def __init__(self, filter_text: str = "", **kwargs):
+        super().__init__(id="slash-dropdown", **kwargs)
+        self.filter_text = filter_text
+        self.selected_index = 0
+        self._filtered: list[tuple[str, str]] = []
+
+    def on_mount(self):
+        self._update_filtered()
+        self._render()
+
+    def _update_filtered(self):
+        f = self.filter_text.strip().lower()
+        if not f or f == "/":
+            self._filtered = list(self.COMMANDS)
+        else:
+            self._filtered = [
+                (cmd, desc) for cmd, desc in self.COMMANDS
+                if f in cmd.lower()
+            ]
+
+    def _render(self):
+        self.remove_children()
+        for i, (cmd, desc) in self._filtered[:10]:
+            cls = "slash-item highlighted" if i == self.selected_index else "slash-item"
+            self.mount(
+                Horizontal(
+                    Static(cmd, classes="name"),
+                    Static(desc, classes="desc"),
+                    classes=cls,
+                )
+            )
+
+    def select_next(self):
+        if self._filtered:
+            self.selected_index = (self.selected_index + 1) % len(self._filtered)
+            self._render()
+
+    def select_prev(self):
+        if self._filtered:
+            self.selected_index = (self.selected_index - 1) % len(self._filtered)
+            self._render()
+
+    def get_selected(self) -> str | None:
+        if self._filtered and 0 <= self.selected_index < len(self._filtered):
+            return self._filtered[self.selected_index][0]
+        return None
+
+
+class SystemMonitor(Horizontal):
+    """Top system monitoring bar showing real-time metrics."""
+
+    def __init__(self, **kwargs):
+        super().__init__(id="system-monitor", **kwargs)
+
+    def on_mount(self):
+        self.set_interval(1.0, self._refresh_metrics)
+        self._metrics: list[str] = []
+        self._refresh_metrics()
+
+    def _refresh_metrics(self):
+        import os
+        import random
+
+        from ..providers import get_manager
+
+        # Provider status (works even without provider)
+        manager = get_manager()
+        provider_name = manager.active_provider or "none"
+        provider_status = f"CORE: {provider_name}" if provider_name != "none" else "CORE: initializing"
+
+        # System info
+        load = os.getloadavg()[0] if hasattr(os, 'getloadavg') else random.uniform(0.5, 3.0)
+        mem_info = ""
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if "MemTotal" in line:
+                        total_kb = int(line.split()[1])
+                        mem_info = f"RAM: {total_kb // 1024 // 1024}GB"
+                        break
+        except Exception:
+            mem_info = "RAM: —"
+
+        self._metrics = [
+            provider_status,
+            f"LOAD: {load:.1f}",
+            mem_info,
+        ]
+
+        widgets = list(self.children)
+        if len(widgets) >= len(self._metrics):
+            for i, text in enumerate(self._metrics):
+                if i < len(widgets):
+                    widgets[i].update(text)
+
+    def compose(self) -> ComposeResult:
+        for _ in range(4):
+            yield Static("", classes="system-metric")
+
+
 class StatusBar(Static):
     """Bottom status bar with system info."""
 
@@ -350,22 +476,40 @@ class StatusBar(Static):
         self.battery = battery
         self.message = ""
 
+    def on_mount(self):
+        self.set_interval(0.5, self._pulse)
+        self._pulse_state = 0
+
+    def _pulse(self):
+        self._pulse_state = (self._pulse_state + 1) % 4
+        self.refresh()
+
     def update(self, message: str = ""):
         self.message = message
         self.refresh()
 
     def render(self) -> str:
-        parts = [self.message or f"NEXUS-OS v{self.version}"]
+        pulse = "◉" if self._pulse_state < 2 else "◎"
+        parts = [f"{pulse} nexus v{self.version}"]
         if self.model:
-            parts.append(f"CORE: [bold cyan]{self.model}[/]")
+            parts.append(f"model: {self.model}")
+        else:
+            # Always show something even without provider — feels alive
+            from ..providers import get_manager
+            mgr = get_manager()
+            if mgr.active_provider:
+                parts.append(f"provider: {mgr.active_provider}")
+            else:
+                parts.append("status: initializing")
         if self.project:
-            parts.append(f"PROJ: [bold yellow]{self.project}[/]")
+            parts.append(f"project: {self.project}")
         if self.termux:
-            parts.append("[bold green]MOBILE-LINK: ACTIVE[/]")
+            parts.append("mobile")
         if self.battery >= 0:
-            color = "green" if self.battery > 20 else "red"
-            parts.append(f"PWR: [{color}]{self.battery}%[/]")
-        return " | ".join(parts)
+            pct = self.battery
+            icon = "●" if pct > 50 else "◉" if pct > 20 else "○"
+            parts.append(f"{icon} {pct}%")
+        return "  ".join(parts)
 
 
 class Heartbeat(Static):

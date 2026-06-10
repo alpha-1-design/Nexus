@@ -348,7 +348,7 @@ class ProjectIndexer:
         import os
 
         root = root_path or self._index.get("root", os.getcwd())
-        audit = {
+        audit: dict[str, Any] = {
             "root": root,
             "python": {"file": None, "packages": []},
             "js": {"file": None, "packages": []},

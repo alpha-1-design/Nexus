@@ -1,26 +1,32 @@
-/* Nexus OS v3 - Touch-Optimized & Polished */
+/* Nexus TUI — Professional Theme
+ * Inspired by Claude Desktop, VS Code dark, and OpenClaw.
+ * Clean, minimal, with subtle cyan accents.
+ */
 
-$bg-dark: #05070a;
-$bg-elevated: #0d1117;
-$bg-active: #161b22;
-$cyan: #00f2ff;
-$purple: #7c3aed;
-$blue: #3b82f6;
-$green: #10b981;
-$red: #f87171;
-$text-primary: #e6edf3;
-$text-dim: #7d8590;
-$border: #30363d;
-$border-active: #484f58;
+$bg-primary:     #0a0a0f;
+$bg-secondary:   #12121a;
+$bg-tertiary:    #1a1a26;
+$bg-hover:       #22223a;
+$bg-input:       #0e0e18;
+$border:         #2a2a3e;
+$border-active:  #3a3a5e;
+$accent:         #00d4ff;
+$accent-dim:     #0088bb;
+$text-primary:   #e0e0ee;
+$text-secondary: #9090aa;
+$text-dim:       #60607a;
+$green:          #00e676;
+$red:            #ff5555;
+$yellow:         #ffaa00;
+$purple:         #bb86fc;
 
 * {
-    background: $bg-dark;
+    background: $bg-primary;
     color: $text-primary;
-    scrollbar-color: $cyan;
 }
 
 Screen {
-    background: $bg-dark;
+    background: $bg-primary;
     layers: base overlay;
 }
 
@@ -28,44 +34,62 @@ Screen {
     height: 1fr;
     border: none;
     padding: 0 1;
+    background: $bg-primary;
 }
 
 #thinking-panel, #tool-panel, #agents-panel {
     height: auto;
-    max-height: 15;
+    max-height: 12;
     border-top: tall $border;
-    background: $bg-dark;
+    background: $bg-secondary;
     padding: 0 1;
 }
 
-.neural-node {
-    /* Subtle glow for the active panel */
-    border-top: tall $border;
-}
-
-.neural-node:focus {
-    border-top: tall $cyan;
+#thinking-panel:focus, #tool-panel:focus, #agents-panel:focus {
+    border-top: tall $accent;
 }
 
 .panel-header {
     background: transparent;
-    color: $cyan;
+    color: $accent;
     text-style: bold;
     padding: 1 1;
-    height: 3; /* Increased touch target */
+    height: 3;
     content-align: left middle;
+    text-style: underline;
 }
 
+/* --- System Monitor Bar --- */
+#system-monitor {
+    background: $bg-tertiary;
+    height: 1;
+    dock: top;
+    padding: 0 2;
+    border-bottom: solid $border;
+}
+
+.system-metric {
+    background: $bg-tertiary;
+    color: $text-secondary;
+    padding: 0 1;
+}
+
+.system-metric.highlight {
+    color: $accent;
+    text-style: bold;
+}
+
+/* --- Input Bar --- */
 #input-bar {
-    background: $bg-elevated;
-    border-top: tall $cyan;
-    height: 5; /* Substantial touch target for mobile */
+    background: $bg-secondary;
+    border-top: solid $border;
+    height: 5;
     padding: 1 2;
     dock: bottom;
 }
 
 .prompt {
-    color: $cyan;
+    color: $accent;
     text-style: bold;
     padding: 1 1;
     width: 7;
@@ -73,22 +97,27 @@ Screen {
 
 .input-field {
     border: none;
-    background: $bg-active;
-    color: #ffffff;
+    background: $bg-input;
+    color: $text-primary;
     width: 1fr;
     padding: 0 1;
 }
 
+.input-field:focus {
+    border: none;
+}
+
+/* --- Status Bar --- */
 #status-bar {
-    background: $bg-dark;
-    color: $text-dim;
+    background: $bg-tertiary;
+    color: $text-secondary;
     height: 1;
     dock: bottom;
     padding: 0 2;
     border-top: solid $border;
 }
 
-/* Chat Message Styling */
+/* --- Chat Messages --- */
 .message-row {
     padding: 1 0;
     margin: 0 1;
@@ -110,20 +139,69 @@ Screen {
     padding-left: 1;
 }
 
-/* Specific Widget Polish */
+/* --- Cards --- */
 AgentCard, ToolStatusWidget, ThinkingBlock {
     padding: 1 2;
     margin: 0 1;
-    background: $bg-elevated;
-    border-radius: 1;
-    height: 3; /* Touch targets */
+    background: $bg-tertiary;
+    height: 3;
 }
 
 AgentCard:hover, ToolStatusWidget:hover, ThinkingBlock:hover {
-    background: $bg-active;
+    background: $bg-hover;
 }
 
 .hidden {
     display: none;
 }
 
+/* --- Slash Command Dropdown --- */
+#slash-dropdown {
+    background: $bg-secondary;
+    border: solid $border;
+    height: auto;
+    max-height: 12;
+    overflow-y: auto;
+    overflow-x: hidden;
+    dock: bottom;
+    layer: overlay;
+    margin: 0 1;
+    padding: 0;
+}
+
+#slash-dropdown:ansi {
+    max-height: 12;
+}
+
+.slash-item {
+    background: transparent;
+    padding: 0 2;
+    height: 3;
+    color: $text-secondary;
+    min-height: 3;
+}
+
+.slash-item.highlighted {
+    background: $bg-hover;
+    color: $accent;
+}
+
+.slash-item .name {
+    color: $accent;
+    text-style: bold;
+    width: 18;
+}
+
+.slash-item .desc {
+    color: $text-secondary;
+}
+
+/* --- Notifications --- */
+NotificationOverlay {
+    background: $bg-tertiary;
+    border: solid $accent-dim;
+    padding: 1 2;
+    margin: 1;
+    height: auto;
+    dock: bottom;
+}

@@ -340,7 +340,7 @@ async def rate_limited_{failure.tool_name}(...):
             except Exception:
                 pass
 
-        lessons.sort(key=lambda l: l.success_count / max(1, l.success_count + l.failure_count), reverse=True)
+        lessons.sort(key=lambda lesson: lesson.success_count / max(1, lesson.success_count + lesson.failure_count), reverse=True)
         self._lessons_cache = lessons
         return lessons
 

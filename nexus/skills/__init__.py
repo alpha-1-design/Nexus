@@ -1,7 +1,7 @@
-"""Skills system - load and apply domain-specific skills to the agent.
+"""Skills system - load, apply, and install domain-specific skills.
 
 Skills are discovered from a directory of Markdown files (`.md`) with YAML frontmatter.
-Inspired by OpenCode's SKILL.md approach and Claude Code's tool permission system.
+Community skills can be installed from a remote registry (GitHub).
 """
 
 import asyncio
@@ -240,3 +240,87 @@ class SkillsManager:
         """Search skills by name, description, or tags."""
         q = query.lower()
         return [s for s in self._loaded if q in s.name.lower() or q in s.description.lower() or q in " ".join(s.tags).lower()]
+
+    # --- Community skill registry ---
+
+    COMMUNITY_REGISTRY_BASE = "https://raw.githubusercontent.com/alpha-1-design/nexus-skills/main"
+
+    def list_community(self) -> list[dict[str, str]]:
+        """Fetch the community skill registry index.
+
+        Returns a list of dicts with keys: name, description, category, tags, version.
+        """
+        import json
+        import urllib.request
+        url = f"{self.COMMUNITY_REGISTRY_BASE}/index.json"
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                return json.loads(resp.read().decode())
+        except Exception:
+            return []
+
+    def search_community(self, query: str) -> list[dict[str, str]]:
+        """Search community skills by name/description/tags."""
+        q = query.lower()
+        all_skills = self.list_community()
+        return [
+            s for s in all_skills
+            if q in s.get("name", "").lower()
+            or q in s.get("description", "").lower()
+            or q in " ".join(s.get("tags", [])).lower()
+        ]
+
+    def install_community(self, skill_name: str) -> dict[str, str]:
+        """Install a community skill by name.
+
+        Downloads the .md file from the community registry and places it
+        in the user's skills directory so it's auto-discovered.
+        """
+        import urllib.request
+
+        all_skills = self.list_community()
+        match = next((s for s in all_skills if s.get("name") == skill_name), None)
+        if not match:
+            return {"status": "error", "message": f"Skill '{skill_name}' not found in community registry"}
+
+        # Determine install dir
+        install_dir = Path.home() / ".nexus" / "skills"
+        install_dir.mkdir(parents=True, exist_ok=True)
+
+        # Download the skill file
+        filename = match.get("file", f"{skill_name}.md")
+        url = f"{self.COMMUNITY_REGISTRY_BASE}/skills/{filename}"
+        dest = install_dir / filename
+
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                content = resp.read().decode("utf-8")
+            dest.write_text(content, encoding="utf-8")
+            # Re-discover to register
+            self.load_all()
+            self.activate(skill_name)
+            return {
+                "status": "success",
+                "message": f"Installed '{skill_name}' ({match.get('version', '1.0')})",
+                "path": str(dest),
+            }
+        except Exception as e:
+            status = "error"
+            msg = str(e)
+            if hasattr(e, "code"):
+                msg = f"Download failed: HTTP {e.code}"
+            return {"status": status, "message": msg}
+
+    def uninstall(self, skill_name: str) -> dict[str, str]:
+        """Remove an installed skill file."""
+        for skill in self._loaded:
+            if skill.name == skill_name:
+                path = Path(skill.source_file)
+                try:
+                    path.unlink()
+                    self.deactivate(skill_name)
+                    self.load_all()
+                    return {"status": "success", "message": f"Uninstalled '{skill_name}'"}
+                except Exception as e:
+                    return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": f"Skill '{skill_name}' not found"}

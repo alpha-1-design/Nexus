@@ -1,6 +1,7 @@
-"""Epic Startup for Nexus."""
+"""Nexus Boot Sequence — Professional animated startup."""
 
 import os
+import shutil
 import sys
 import time
 
@@ -9,76 +10,110 @@ def clear():
     os.system("clear" if os.name == "posix" else "cls")
 
 
-def fade_print(text, delay=0.01):
+def _get_terminal_width() -> int:
+    try:
+        return shutil.get_terminal_size().columns
+    except Exception:
+        return 80
+
+
+def _color_text(text: str, code: int, bold: bool = False) -> str:
+    b = "1;" if bold else ""
+    return f"\033[{b}{code}m{text}\033[0m"
+
+
+def fade_print(text: str, delay: float = 0.005, end: str = "\n"):
     for char in text:
         sys.stdout.write(char)
         sys.stdout.flush()
         time.sleep(delay)
-    print()
+    sys.stdout.write(end)
+    sys.stdout.flush()
 
 
-def get_logo(config=None):
-    """Dynamic logo that derives color from the provider identity."""
-    # Generate a deterministic color based on the provider name hash
-    provider_name = config.active_provider if config else "nexus-default"
-    hash_val = sum(ord(c) for c in provider_name)
-    # Map to one of the 6 standard terminal colors (31-36)
-    color_code = 31 + (hash_val % 6)
-    color = f"\033[{color_code}m"
+def _draw_progress_bar(current: int, total: int, width: int = 16) -> str:
+    filled = int(current / total * width) if total > 0 else 0
+    bar = "\u2588" * filled + "\u2591" * (width - filled)
+    pct = int(current / total * 100) if total > 0 else 0
+    color = "32" if pct == 100 else "33" if pct > 50 else "36"
+    return f"[{bar}] {_color_text(f'{pct:2d}%', color, bold=True)}"
 
-    reset = "\033[0m"
 
-    return f"""
-{color}      ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗{reset}
-{color}      ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝{reset}
-{color}      ██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗{reset}
-{color}      ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║{reset}
-{color}      ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║{reset}
-{color}      ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝{reset}
-          {color}∞  THE NEURAL OS ({provider_name.upper()})  ∞{reset}
-    """
+def get_logo():
+    """Return the Nexus ASCII logo in cyan."""
+    c = "\033[36m"
+    r = "\033[0m"
+    return f"""{c}
+   {r}   ███╗   ██╗{c}███████╗{r}██╗  ██╗{c}██╗   ██╗{r}███████╗{c}{r}
+   {r}   ████╗  ██║{c}██╔════╝{r}╚██╗██╔╝{c}██║   ██║{r}██╔════╝{c}{r}
+   {r}   ██╔██╗ ██║{c}█████╗  {r} ╚███╔╝ {c}██║   ██║{r}███████╗{c}{r}
+   {r}   ██║╚██╗██║{c}██╔══╝  {r} ██╔██╗ {c}██║   ██║{r}╚════██║{c}{r}
+   {r}   ██║ ╚████║{c}███████╗{r}██╔╝ ██╗{c}╚██████╔╝{r}███████║{c}{r}
+   {r}   ╚═╝  ╚═══╝{c}╚══════╝{r}╚═╝  ╚═╝{c} ╚═════╝ {r}╚══════╝{c}{r}
+{c}                      ∞  N E U R A L   O S  ∞{r}"""
+
+
+def _render_subsystem(name: str, label: str, duration: float = 0.6):
+    """Animate a single subsystem check."""
+    width = 20
+    steps = 10
+    base = f"    {_color_text('[', 90)}{_color_text(name, 36, True)}{_color_text(']', 90)}  {label:<30}"
+    for i in range(steps + 1):
+        bar = _draw_progress_bar(i, steps, width)
+        sys.stdout.write(f"\r{base} {bar}")
+        sys.stdout.flush()
+        time.sleep(duration / steps)
+    status = _color_text("OK", 32, True)
+    sys.stdout.write(f"  {status}\n")
+    sys.stdout.flush()
 
 
 def display_welcome():
+    """Display the full animated boot sequence."""
     clear()
-    from ..config import load_config
 
-    config = load_config()
-
-    logo = get_logo(config)
+    logo = get_logo()
     print(logo)
+    print()
 
-    # ... rest of display_welcome logic ...
+    w = _get_terminal_width()
+    dash = _color_text("\u2500" * min(w - 4, 60), 90)
+    print(f"    {dash}")
+    print()
 
-    cyan = "\033[36m"
-    bold = "\033[1m"
-    reset = "\033[0m"
-    dim = "\033[90m"
-    green = "\033[32m"
+    version_line = _color_text("N E X U S   N E U R A L   O S   v2", 36, True)
+    build_line = _color_text("[build 2026.06.10]", 90)
+    print(f"    {version_line}  {build_line}")
 
-    fade_print(f"    {bold}N E X U S   N E U R A L   O S   V 2{reset}  {dim}[build 2026.05.05]{reset}", 0.005)
-    print(f"    {dim}──────────────────────────────────────────────────────────{reset}")
+    license_line = _color_text("Apache 2.0  |  https://github.com/alpha-1-design/Nexus", 90)
+    print(f"    {license_line}")
+    print()
 
     subsystems = [
-        ("CORE ", "Synaptic weights loading"),
-        ("MESH ", "Vector-mesh link established"),
-        ("EXEC ", "Tool registry verification"),
-        ("COMM ", "Uplink protocols standby"),
+        ("CORE", "Synaptic weight initialization"),
+        ("MESH", "Vector-mesh topology discovery"),
+        ("EXEC", "Tool registry verification"),
+        ("COMM", "Provider interface handshake"),
+        ("MEM ", "Memory graph hydration"),
+        ("SYST", "Environment resilience check"),
+        ("BEAT", "Heartbeat service startup"),
     ]
 
-    for sub, msg in subsystems:
-        time.sleep(0.06)
-        # Dynamic progress bar for each subsystem
-        bar = "▰▰▰▰▰▰▰▰▰▰"
-        print(f"    {cyan}[{sub}]{reset} {msg:<30} {dim}{bar}{reset} {green}OK{reset}")
+    for name, label in subsystems:
+        _render_subsystem(name, label, duration=0.4)
 
-    # Integrity Check
-    time.sleep(0.2)
-    print(f"    {cyan}[SYST ]{reset} {bold}ENVIRONMENT RESILIENCE: NOMINAL{reset}")
-    print(f"    {cyan}[BEAT ]{reset} {bold}HEARTBEAT: STABLE{reset}")
+    print()
+    line = _color_text("\u2500" * min(w - 4, 60), 90)
+    print(f"    {line}")
+    print()
 
-    print(f"\n    {bold}Welcome to the Nexus.{reset}")
-    print(f"    {dim}Neural Link established. Awaiting Directive.{reset}\n")
+    welcome = _color_text("Welcome to Nexus. Neural link established.", 36, True)
+    directive = _color_text("Awaiting directive.", 90)
+    print(f"    {welcome}")
+    print(f"    {directive}")
+
+    tip = _color_text("Tip: Type /help to see all available commands.", 90)
+    print(f"\n    {tip}\n")
 
 
 if __name__ == "__main__":

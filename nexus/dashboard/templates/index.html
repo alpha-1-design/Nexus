@@ -1,224 +1,219 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Nexus Dashboard</title>
-    <meta name="description" content="Nexus AI Coding Agent CLI Dashboard">
-    <meta name="theme-color" content="#238636">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Nexus">
-    <link rel="manifest" href="/manifest.json">
-    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23238636' width='100' height='100' rx='20'/><text y='.9em' font-size='85' x='10'>⚡</text></svg>">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { background: #010409; color: #c9d1d9; font-family: ui-monospace, monospace; }
-        .card { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; }
-        .terminal-container { background: #000; border-top: 2px solid #238636; position: fixed; bottom: 0; left: 0; width: 100%; padding: 12px; z-index: 100; }
-        #console-box { background: rgba(0,0,0,0.9); border: 1px solid #1e3a8a; border-radius: 4px; }
-        pre { white-space: pre-wrap; word-wrap: break-word; font-size: 10px; }
-        input { background: transparent; border: none; outline: none; color: #3fb950; font-size: 16px; width: 100%; }
-        .badge { font-size: 9px; padding: 2px 6px; border-radius: 4px; }
-        .badge-active { background: #238636; color: #fff; }
-        .badge-inactive { background: #30363d; color: #8b949e; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nexus Dashboard</title>
+  <meta name="theme-color" content="#ff6b00">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/static/css/style.css">
 </head>
-<body class="pb-80 px-4 pt-4">
-    <header class="flex justify-between items-center mb-6">
-        <div>
-            <h1 class="text-lg font-black text-white">REHOBOTH <span class="text-blue-500">NEXUS</span></h1>
-            <p class="text-[9px] text-gray-500 uppercase tracking-widest">AI Developer Agent</p>
+<body>
+
+<aside class="sidebar">
+  <div class="logo">NEXUS</div>
+  <div class="subtitle">Neural OS</div>
+  <nav>
+    <a href="#" class="active" data-section="overview"><span class="status-dot online" id="nav-status-dot"></span> Overview</a>
+    <a href="#" data-section="projects"><span class="status-dot online" style="background:var(--accent)"></span> Projects</a>
+    <a href="#" data-section="providers">Providers <span class="count" id="nav-providers-count">0</span></a>
+    <a href="#" data-section="tools">Tools <span class="count" id="nav-tools-count">0</span></a>
+    <a href="#" data-section="skills">Skills <span class="count" id="nav-skills-count">0</span></a>
+    <a href="#" data-section="agents">Agents <span class="count" id="nav-agents-count">0</span></a>
+    <a href="#" data-section="memory">Memory</a>
+    <a href="#" data-section="sessions">Sessions <span class="count" id="nav-sessions-count">0</span></a>
+    <a href="#" data-section="settings">Settings</a>
+    <a href="#" data-section="automation">Automation</a>
+  </nav>
+  <div style="font-size:10px;color:var(--text-muted);padding-top:16px;border-top:1px solid var(--border);">
+    v0.1.0 &middot; Apache 2.0
+  </div>
+</aside>
+
+<div class="main">
+  <div class="topbar">
+    <div class="breadcrumb">Dashboard / <span id="section-title">Overview</span></div>
+    <div class="meta">
+      <span id="header-provider">No provider</span>
+      <span id="header-time"></span>
+    </div>
+  </div>
+
+  <div class="content" id="main-content">
+
+    <!-- ═══ OVERVIEW ═══ -->
+    <section id="section-overview">
+      <div class="status-grid" id="status-grid">
+        <div class="stat-card"><div class="label">Status</div><div class="value" id="stat-status">Initializing</div></div>
+        <div class="stat-card"><div class="label">Provider</div><div class="value" id="stat-provider">—</div><div class="sub" id="stat-provider-model"></div></div>
+        <div class="stat-card"><div class="label">Tools</div><div class="value" id="stat-tools">0</div><div class="sub">registered</div></div>
+        <div class="stat-card"><div class="label">Skills</div><div class="value" id="stat-skills">0</div><div class="sub">active</div></div>
+        <div class="stat-card"><div class="label">Facts</div><div class="value" id="stat-facts">0</div><div class="sub">stored</div></div>
+        <div class="stat-card"><div class="label">Sessions</div><div class="value" id="stat-sessions">0</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">System Console</div>
+        <div class="terminal">
+          <div class="bar">
+            <div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+            <div class="title">nexus-console</div>
+            <div style="margin-left:auto;font-size:9px;color:var(--text-dim)" id="console-timestamp"></div>
+          </div>
+          <div class="body" id="console-body">Initializing Nexus...</div>
+          <div class="input-row">
+            <span class="prompt">❯</span>
+            <input type="text" id="cmd-input" placeholder="Enter instruction..." autocomplete="off">
+          </div>
         </div>
-        <div class="text-[10px] text-right">
-            <span id="system-status" class="text-gray-500">Loading...</span>
+      </div>
+    </section>
+
+    <!-- ═══ PROJECTS ═══ -->
+    <section id="section-projects" style="display:none">
+      <div class="flex items-center justify-between mb-4">
+        <div class="panel-header" style="border:none;padding:0">Project Browser</div>
+        <div class="flex gap-2">
+          <input type="text" id="project-root" value="." placeholder="Project path" style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 10px;font-family:inherit;font-size:11px;width:200px">
+          <button class="btn btn-sm" onclick="loadProjects()">Browse</button>
         </div>
-    </header>
+      </div>
+      <div class="split">
+        <div class="split-left" id="project-tree"><div class="empty-state">Enter a path and click Browse</div></div>
+        <div class="split-right" id="project-editor"><div class="empty-state">Select a file to edit</div></div>
+      </div>
+    </section>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-        <div class="card p-4">
-            <h2 class="text-blue-400 text-xs font-bold mb-3 uppercase tracking-wider">Providers</h2>
-            <div id="providers-list" class="space-y-2 text-[10px]"></div>
+    <!-- ═══ PROVIDERS ═══ -->
+    <section id="section-providers" style="display:none">
+      <div class="flex items-center justify-between mb-4">
+        <div class="panel-header" style="border:none;padding:0">AI Providers</div>
+        <button class="btn btn-primary btn-sm" onclick="showAddProvider()">+ Add Provider</button>
+      </div>
+      <div class="panel">
+        <div class="panel-body" id="providers-list"></div>
+      </div>
+      <div id="provider-form" class="panel" style="display:none">
+        <div class="panel-header">New Provider</div>
+        <div class="panel-body">
+          <div class="form-row"><label>Name</label><input id="prov-name" placeholder="e.g. my-openai"></div>
+          <div class="form-row"><label>Type</label>
+            <select id="prov-type">
+              <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
+              <option value="google">Google</option><option value="groq">Groq</option>
+              <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option>
+              <option value="openrouter">OpenRouter</option><option value="together">Together</option>
+              <option value="mistral">Mistral</option>
+            </select>
+          </div>
+          <div class="form-row"><label>API Key</label><input id="prov-key" placeholder="sk-..." type="password"></div>
+          <div class="form-row"><label>Model</label><input id="prov-model" placeholder="gpt-4o"></div>
+          <div class="form-row"><label>Base URL (optional)</label><input id="prov-url" placeholder="https://api.openai.com/v1"></div>
+          <div class="flex gap-2">
+            <button class="btn btn-primary" onclick="addProvider()">Save</button>
+            <button class="btn" onclick="hideAddProvider()">Cancel</button>
+          </div>
         </div>
-        <div class="card p-4">
-            <h2 class="text-blue-400 text-xs font-bold mb-3 uppercase tracking-wider">Agent Stats</h2>
-            <div id="agent-stats" class="space-y-1 text-[10px]"></div>
+      </div>
+    </section>
+
+    <!-- ═══ TOOLS ═══ -->
+    <section id="section-tools" style="display:none">
+      <div class="panel">
+        <div class="panel-header">Available Tools</div>
+        <div class="panel-body" id="tools-list"></div>
+      </div>
+    </section>
+
+    <!-- ═══ SKILLS ═══ -->
+    <section id="section-skills" style="display:none">
+      <div class="panel">
+        <div class="panel-header">Capabilities</div>
+        <div class="panel-body" id="skills-list"></div>
+      </div>
+    </section>
+
+    <!-- ═══ AGENTS ═══ -->
+    <section id="section-agents" style="display:none">
+      <div class="flex items-center justify-between mb-4">
+        <div class="panel-header" style="border:none;padding:0">Active Agents</div>
+        <div class="flex gap-2">
+          <input type="text" id="spawn-task" placeholder="Task description" style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 10px;font-family:inherit;font-size:11px;width:240px">
+          <select id="spawn-role" style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 8px;font-family:inherit;font-size:11px">
+            <option value="coder">Coder</option><option value="planner">Planner</option>
+            <option value="researcher">Researcher</option><option value="reviewer">Reviewer</option>
+            <option value="tester">Tester</option>
+          </select>
+          <button class="btn btn-primary btn-sm" onclick="spawnAgent()">Spawn</button>
         </div>
-    </div>
+      </div>
+      <div id="agents-list"></div>
+    </section>
 
-    <div class="card p-4 mb-4">
-        <h2 class="text-blue-400 text-xs font-bold mb-3 uppercase tracking-wider">Skills</h2>
-        <div id="skills-list" class="flex flex-wrap gap-2"></div>
-    </div>
+    <!-- ═══ MEMORY ═══ -->
+    <section id="section-memory" style="display:none">
+      <div class="panel">
+        <div class="panel-header">Facts &amp; Knowledge</div>
+        <div class="panel-body" id="facts-list"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">Vector Memory</div>
+        <div class="panel-body"><span class="empty-state">Vector memory available</span></div>
+      </div>
+    </section>
 
-    <div class="card p-4 mb-4">
-        <h2 class="text-blue-400 text-xs font-bold mb-3 uppercase tracking-wider">Available Tools</h2>
-        <div id="tools-list" class="flex flex-wrap gap-1"></div>
-    </div>
+    <!-- ═══ SESSIONS ═══ -->
+    <section id="section-sessions" style="display:none">
+      <div class="panel">
+        <div class="panel-header">Conversation Sessions</div>
+        <div class="panel-body" id="sessions-list"></div>
+      </div>
+    </section>
 
-    <div class="card p-4 mb-4">
-        <h2 class="text-blue-400 text-xs font-bold mb-3 uppercase tracking-wider">Sessions</h2>
-        <div id="sessions-list" class="text-[10px] space-y-1"></div>
-    </div>
-
-    <div class="card p-4 mb-4">
-        <h2 class="text-purple-400 text-xs font-bold mb-3 uppercase tracking-wider">Automation</h2>
-        <div id="automation-status" class="text-[10px] space-y-1"></div>
-    </div>
-
-    <div class="card p-4 mb-4">
-        <h2 class="text-blue-400 text-xs font-bold mb-3 uppercase tracking-wider">Facts</h2>
-        <div id="facts-list" class="text-[10px] max-h-32 overflow-y-auto"></div>
-    </div>
-
-    <div id="console-box" class="fixed bottom-20 left-4 right-4 p-2 h-32 overflow-hidden shadow-2xl z-50">
-        <div class="text-[8px] text-blue-500 font-bold mb-1 tracking-tighter uppercase">Nexus System</div>
-        <pre id="log-content" class="text-[9px] text-green-400 opacity-80 leading-tight">Initializing...</pre>
-    </div>
-
-    <div class="terminal-container">
-        <div class="flex items-center gap-2">
-            <span class="text-green-500 font-bold text-sm">CMD:></span>
-            <input type="text" id="cmdInput" placeholder="Enter instruction..." autocomplete="off" onkeypress="handleEnter(event)">
+    <!-- ═══ SETTINGS ═══ -->
+    <section id="section-settings" style="display:none">
+      <div class="panel">
+        <div class="panel-header">Nexus Configuration</div>
+        <div class="panel-body">
+          <div class="form-row"><label>User Name</label><input id="set-user" placeholder="Optional"></div>
+          <div class="form-row"><label>Tool Profile</label>
+            <select id="set-profile">
+              <option value="coding">Coding</option><option value="default">Default</option>
+              <option value="minimal">Minimal</option><option value="all">All</option>
+            </select>
+          </div>
+          <div class="form-row"><label>Search Provider</label>
+            <select id="set-search">
+              <option value="">None</option><option value="exa">Exa</option>
+              <option value="tavily">Tavily</option><option value="brave">Brave</option>
+            </select>
+          </div>
+          <div class="form-row"><label>Log Level</label>
+            <select id="set-loglevel">
+              <option value="DEBUG">DEBUG</option><option value="INFO" selected>INFO</option>
+              <option value="WARNING">WARNING</option><option value="ERROR">ERROR</option>
+            </select>
+          </div>
+          <div class="form-row flex items-center gap-4">
+            <label style="margin:0"><input type="checkbox" id="set-sandbox"> Sandbox Mode</label>
+            <label style="margin:0"><input type="checkbox" id="set-termux"> Termux Mode</label>
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+          <span id="settings-status" class="text-sm text-dim" style="margin-left:12px"></span>
         </div>
-        <div id="feedback" class="text-[10px] mt-1 text-gray-500 italic">Awaiting instructions.</div>
-    </div>
+      </div>
+    </section>
 
-    <script>
-        async function loadStatus() {
-            const status = await fetch('/api/status').then(r => r.json());
-            document.getElementById('system-status').innerHTML =
-                `<span class="text-green-500 font-bold">● ONLINE</span><br>Termux: ${status.termux_env ? 'Yes' : 'No'}`;
-        }
+    <!-- ═══ AUTOMATION ═══ -->
+    <section id="section-automation" style="display:none">
+      <div class="panel">
+        <div class="panel-header">Automation Status</div>
+        <div class="panel-body" id="automation-status"></div>
+      </div>
+    </section>
 
-        async function loadProviders() {
-            const data = await fetch('/api/providers').then(r => r.json());
-            const el = document.getElementById('providers-list');
-            el.innerHTML = data.providers.map(p => `
-                <div class="flex justify-between">
-                    <span class="text-gray-300">${p.name}</span>
-                    <span class="${p.active ? 'text-green-400' : 'text-gray-600'}">${p.model || 'N/A'}</span>
-                </div>
-            `).join('') || '<div class="text-gray-500">No providers configured</div>';
-        }
+  </div>
+</div>
 
-        async function loadAgentStats() {
-            const data = await fetch('/api/agent/stats').then(r => r.json());
-            const el = document.getElementById('agent-stats');
-            el.innerHTML = Object.entries(data).map(([k, v]) =>
-                `<div><span class="text-gray-500">${k}:</span> <span class="text-gray-300">${v}</span></div>`
-            ).join('');
-        }
-
-        async function loadSkills() {
-            const data = await fetch('/api/skills').then(r => r.json());
-            const el = document.getElementById('skills-list');
-            el.innerHTML = data.skills.map(s =>
-                `<span class="badge ${s.active ? 'badge-active' : 'badge-inactive'}">${s.name}</span>`
-            ).join('') || '<span class="text-gray-500 text-[10px]">No skills loaded</span>';
-        }
-
-        async function loadTools() {
-            const data = await fetch('/api/tools').then(r => r.json());
-            const el = document.getElementById('tools-list');
-            el.innerHTML = data.tools.map(t =>
-                `<span class="bg-gray-800 text-gray-300 px-2 py-1 rounded text-[9px]">${t.name}</span>`
-            ).join('');
-        }
-
-        async function loadSessions() {
-            const data = await fetch('/api/sessions').then(r => r.json());
-            const el = document.getElementById('sessions-list');
-            el.innerHTML = data.sessions.map(s =>
-                `<div><span class="text-gray-500">${s.id}</span> — ${s.turn_count} turns</div>`
-            ).join('') || '<div class="text-gray-500">No sessions</div>';
-        }
-
-        async function loadFacts() {
-            const data = await fetch('/api/facts').then(r => r.json());
-            const el = document.getElementById('facts-list');
-            el.innerHTML = data.facts.map(f =>
-                `<div class="text-gray-300">${f.content}</div>`
-            ).join('') || '<div class="text-gray-500">No facts stored</div>';
-        }
-
-        async function loadAutomation() {
-            try {
-                const data = await fetch('/api/automation/status').then(r => r.json());
-                const ad = data.anti_detection || {};
-                const tools = data.automation_tools || [];
-                document.getElementById('automation-status').innerHTML = `
-                    <div class="flex gap-2 flex-wrap mb-2">
-                        <span class="badge ${data.playwright_available ? 'badge-active' : 'badge-inactive'}">Playwright</span>
-                        <span class="badge ${data.browser_session_active ? 'badge-active' : 'badge-inactive'}">Browser Session</span>
-                        <span class="badge ${data.httpx_available ? 'badge-active' : 'badge-inactive'}">HTTP Client</span>
-                    </div>
-                    <div class="text-gray-400">${tools.length} automation tools</div>
-                    <div class="text-gray-500 text-[9px] mt-1">Stealth: ${ad.stealth_scripts} scripts | UA rotation: ${ad.user_agent_rotation} | CAPTCHA: ${ad.captcha_detection} | Human-like: ${ad.human_like_behavior}</div>
-                `;
-            } catch(e) {
-                document.getElementById('automation-status').innerHTML = '<div class="text-gray-500">Automation API unavailable</div>';
-            }
-        }
-
-        async function loadLogs() {
-            try {
-                const data = await fetch('/logs').then(r => r.text());
-                document.getElementById('log-content').innerText = data.slice(-500);
-            } catch(e) {}
-        }
-
-        function handleEnter(e) {
-            if (e.key === 'Enter') {
-                const input = document.getElementById('cmdInput');
-                const feedback = document.getElementById('feedback');
-                feedback.innerText = "Processing...";
-                fetch('/api/execute', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({instruction: input.value})
-                }).then(res => res.json()).then(data => {
-                    feedback.innerText = data.response || 'Done.';
-                    input.value = '';
-                }).catch(() => {
-                    feedback.innerText = "Error executing command.";
-                });
-            }
-        }
-
-        loadStatus(); loadProviders(); loadAgentStats(); loadSkills(); loadTools(); loadSessions(); loadAutomation(); loadFacts();
-        setInterval(() => { loadLogs(); loadSessions(); loadAutomation(); loadFacts(); }, 5000);
-
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').catch(() => {});
-        }
-    </script>
-
-    <div id="install-banner" class="hidden fixed bottom-0 left-0 right-0 bg-gray-800 border-t border-green-500 p-4 text-center z-50">
-        <span class="text-white mr-4">Install Nexus Dashboard as an app</span>
-        <button onclick="installApp()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded font-bold text-sm">Install</button>
-        <button onclick="dismissInstall()" class="text-gray-400 hover:text-white ml-4 text-sm">Not now</button>
-    </div>
-
-    <script>
-        let deferredPrompt;
-        window.addEventListener('beforeinstallprompt', (e) => {
-            e.preventDefault();
-            deferredPrompt = e;
-            document.getElementById('install-banner').classList.remove('hidden');
-        });
-        function installApp() {
-            if (deferredPrompt) {
-                deferredPrompt.prompt();
-                deferredPrompt.userChoice.then(() => {
-                    deferredPrompt = null;
-                    document.getElementById('install-banner').classList.add('hidden');
-                });
-            }
-        }
-        function dismissInstall() {
-            document.getElementById('install-banner').classList.add('hidden');
-        }
-    </script>
+<script src="/static/js/app.js"></script>
 </body>
 </html>

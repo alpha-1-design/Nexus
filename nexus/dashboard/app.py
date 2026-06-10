@@ -1,190 +1,57 @@
-import os
-import sys
+"""Flask web dashboard for Nexus."""
 
-import psutil
+import json
+import time
 
-try:
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from nexus.dashboard.api import get_api
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory, stream_with_context
 
-    NEXUS_API_AVAILABLE = True
-except ImportError:
-    NEXUS_API_AVAILABLE = False
-
-from flask import Flask, jsonify, render_template, request, send_from_directory
-
-app = Flask(__name__, template_folder="templates")
+app = Flask(__name__, template_folder="templates", static_folder="static")
 
 
-def get_vitals():
-    vitals = {}
+def _get_api():
     try:
-        usage = psutil.disk_usage("/")
-        vitals["disk"] = f"{usage.percent}%"
-    except Exception:
-        vitals["disk"] = "?"
-    try:
-        vitals["cpu"] = f"{psutil.cpu_percent(interval=0.1)}%"
-    except Exception:
-        vitals["cpu"] = "?"
-    return vitals
+        from nexus.dashboard.api import get_api
+        return get_api()
+    except ImportError:
+        return None
 
+
+def _vitals():
+    import psutil
+    out = {}
+    try:
+        out["disk"] = f"{psutil.disk_usage('/').percent}%"
+    except Exception:
+        out["disk"] = "?"
+    try:
+        out["cpu"] = f"{psutil.cpu_percent(interval=0.1)}%"
+    except Exception:
+        out["cpu"] = "?"
+    return out
+
+
+def _api(f):
+    def wrapper(*args, **kwargs):
+        api = _get_api()
+        if api is None:
+            return jsonify({"error": "Nexus API not available"}), 503
+        return f(api, *args, **kwargs)
+    wrapper.__name__ = f.__name__
+    return wrapper
+
+
+# ── page ─────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
-    vitals = get_vitals()
-    status = {}
-    skills = []
-    providers = []
-    if NEXUS_API_AVAILABLE:
-        api = get_api()
-        status = api.get_status()
-        skills = api.get_skills()
-        providers = api.get_providers()
+    api = _get_api()
     return render_template(
         "index.html",
-        vitals=vitals,
-        status=status,
-        skills=skills,
-        providers=providers,
+        vitals=_vitals(),
+        status=api.get_status() if api else {},
+        skills=api.get_skills() if api else [],
+        providers=api.get_providers() if api else [],
     )
-
-
-@app.route("/api/status")
-def api_status():
-    if not NEXUS_API_AVAILABLE:
-        return jsonify({"error": "Nexus API not available"})
-    api = get_api()
-    return jsonify(api.get_status())
-
-
-@app.route("/api/providers", methods=["GET", "POST"])
-def api_providers():
-    if not NEXUS_API_AVAILABLE:
-        return jsonify({"error": "Nexus API not available"})
-    api = get_api()
-    if request.method == "POST":
-        return jsonify(api.add_provider(request.json))
-    return jsonify(api.get_providers())
-
-
-@app.route("/api/skills")
-def api_skills():
-    if not NEXUS_API_AVAILABLE:
-        return jsonify({"error": "Nexus API not available"})
-    api = get_api()
-    return jsonify(api.get_skills())
-
-
-@app.route("/api/skills/<name>/activate", methods=["POST"])
-def api_skill_activate(name):
-    if not NEXUS_API_AVAILABLE:
-        return jsonify({"error": "Nexus API not available"})
-    api = get_api()
-    return jsonify(api.activate_skill(name))
-
-
-@app.route("/api/memory/search", methods=["POST"])
-def api_memory_search():
-    if not NEXUS_API_AVAILABLE:
-        return jsonify({"error": "Nexus API not available"})
-    api = get_api()
-    data = request.json or {}
-    return jsonify(api.search_memory(data.get("query", ""), data.get("limit", 10)))
-
-
-@app.route("/api/memory/store", methods=["POST"])
-def api_memory_store():
-    if not NEXUS_API_AVAILABLE:
-        return jsonify({"error": "Nexus API not available"})
-    api = get_api()
-    data = request.json or {}
-    return jsonify(api.store_memory(data.get("content", ""), data.get("metadata")))
-
-
-@app.route("/api/facts", methods=["GET", "POST"])
-def api_facts():
-    if not NEXUS_API_AVAILABLE:
-        return jsonify({"error": "Nexus API not available"})
-    api = get_api()
-    if request.method == "POST":
-        data = request.json or {}
-        return jsonify(api.add_fact(data.get("key", ""), data.get("value"), data.get("category", "general")))
-    return jsonify(api.get_facts())
-
-
-@app.route("/api/sessions")
-def api_sessions():
-    if not NEXUS_API_AVAILABLE:
-        return jsonify({"error": "Nexus API not available"})
-    api = get_api()
-    return jsonify(api.list_sessions())
-
-
-@app.route("/api/agent/stats")
-def api_agent_stats():
-    if not NEXUS_API_AVAILABLE:
-        return jsonify({"error": "Nexus API not available"})
-    api = get_api()
-    return jsonify(api.get_agent_stats())
-
-
-@app.route("/api/tools")
-def api_tools():
-    if not NEXUS_API_AVAILABLE:
-        return jsonify({"error": "Nexus API not available"})
-    api = get_api()
-    return jsonify(api.get_tools())
-
-
-@app.route("/api/vitals")
-def api_vitals():
-    return jsonify(get_vitals())
-
-
-@app.route("/api/automation/status")
-def api_automation_status():
-    if not NEXUS_API_AVAILABLE:
-        return jsonify({"error": "Nexus API not available"})
-    api = get_api()
-    return jsonify(api.get_automation_status())
-
-
-@app.route("/api/automation/execute", methods=["POST"])
-def api_automation_execute():
-    if not NEXUS_API_AVAILABLE:
-        return jsonify({"error": "Nexus API not available"})
-    api = get_api()
-    data = request.json or {}
-    tool = data.get("tool")
-    params = data.get("params", {})
-    return jsonify(api.run_automation_tool(tool, params))
-
-
-@app.route("/api/execute", methods=["POST"])
-async def api_execute():
-    if not NEXUS_API_AVAILABLE:
-        return jsonify({"error": "Nexus API not available"})
-    api = get_api()
-    data = request.json or {}
-    task = data.get("task", "")
-    if not task:
-        return jsonify({"error": "No task provided"})
-    result = await api.run_agent_task(task)
-    return jsonify(result)
-
-
-@app.route("/logs")
-def logs():
-    lines = []
-    log_path = os.path.join(os.path.dirname(__file__), "nexus.log")
-    if os.path.exists(log_path):
-        try:
-            with open(log_path) as f:
-                lines = f.readlines()[-50:]
-        except Exception:
-            pass
-    return "\n".join(lines)
 
 
 @app.route("/manifest.json")
@@ -195,3 +62,199 @@ def manifest():
 @app.route("/sw.js")
 def service_worker():
     return send_from_directory(app.template_folder, "sw.js", mimetype="application/javascript")
+
+
+# ── status ───────────────────────────────────────────────────
+
+@app.route("/api/status")
+@_api
+def api_status(api):
+    return jsonify(api.get_status())
+
+
+@app.route("/api/vitals")
+def api_vitals():
+    return jsonify(_vitals())
+
+
+# ── providers ────────────────────────────────────────────────
+
+@app.route("/api/providers", methods=["GET", "POST", "DELETE"])
+@_api
+def api_providers(api):
+    if request.method == "POST":
+        return jsonify(api.add_provider(request.json))
+    if request.method == "DELETE":
+        data = request.json or {}
+        return jsonify(api.remove_provider(data.get("name", "")))
+    return jsonify(api.get_providers())
+
+
+@app.route("/api/providers/<name>/activate", methods=["POST"])
+@_api
+def api_provider_activate(api, name):
+    return jsonify(api.set_active_provider(name))
+
+
+# ── skills ───────────────────────────────────────────────────
+
+@app.route("/api/skills")
+@_api
+def api_skills(api):
+    return jsonify(api.get_skills())
+
+
+@app.route("/api/skills/<name>/activate", methods=["POST"])
+@_api
+def api_skill_activate(api, name):
+    return jsonify(api.activate_skill(name))
+
+
+# ── memory ───────────────────────────────────────────────────
+
+@app.route("/api/memory/search", methods=["POST"])
+@_api
+def api_memory_search(api):
+    data = request.json or {}
+    return jsonify(api.search_memory(data.get("query", ""), data.get("limit", 10)))
+
+
+@app.route("/api/memory/store", methods=["POST"])
+@_api
+def api_memory_store(api):
+    data = request.json or {}
+    return jsonify(api.store_memory(data.get("content", ""), data.get("metadata")))
+
+
+@app.route("/api/facts", methods=["GET", "POST"])
+@_api
+def api_facts(api):
+    if request.method == "POST":
+        data = request.json or {}
+        return jsonify(api.add_fact(data.get("key", ""), data.get("value"), data.get("category", "general")))
+    return jsonify(api.get_facts())
+
+
+# ── sessions ─────────────────────────────────────────────────
+
+@app.route("/api/sessions")
+@_api
+def api_sessions(api):
+    return jsonify(api.list_sessions())
+
+
+# ── tools ────────────────────────────────────────────────────
+
+@app.route("/api/tools")
+@_api
+def api_tools(api):
+    return jsonify(api.get_tools())
+
+
+# ── agent ────────────────────────────────────────────────────
+
+@app.route("/api/agent/stats")
+@_api
+def api_agent_stats(api):
+    return jsonify(api.get_agent_stats())
+
+
+@app.route("/api/agent/list")
+@_api
+def api_agent_list(api):
+    return jsonify(api.list_agents())
+
+
+@app.route("/api/agent/spawn", methods=["POST"])
+@_api
+def api_agent_spawn(api):
+    data = request.json or {}
+    return jsonify(api.spawn_agent(data.get("task", ""), data.get("role", "coder"), data.get("name")))
+
+
+@app.route("/api/agent/kill", methods=["POST"])
+@_api
+def api_agent_kill(api):
+    data = request.json or {}
+    return jsonify(api.kill_agent(data.get("id", "")))
+
+
+@app.route("/api/execute", methods=["POST"])
+async def api_execute():
+    api = _get_api()
+    if api is None:
+        return jsonify({"error": "Nexus API not available"}), 503
+    data = request.json or {}
+    task = data.get("task", "")
+    if not task:
+        return jsonify({"error": "No task provided"}), 400
+    result = await api.run_agent_task(task)
+    return jsonify(result)
+
+
+# ── projects ─────────────────────────────────────────────────
+
+@app.route("/api/projects")
+@_api
+def api_projects(api):
+    root = request.args.get("root")
+    return jsonify(api.list_projects(root))
+
+
+@app.route("/api/projects/tree")
+@_api
+def api_project_tree(api):
+    path = request.args.get("path", ".")
+    depth = int(request.args.get("depth", 4))
+    return jsonify(api.get_project_tree(path, depth))
+
+
+@app.route("/api/projects/read")
+@_api
+def api_project_read(api):
+    file_path = request.args.get("path", "")
+    return jsonify(api.read_project_file(file_path))
+
+
+@app.route("/api/projects/write", methods=["POST"])
+@_api
+def api_project_write(api):
+    data = request.json or {}
+    return jsonify(api.write_project_file(data.get("path", ""), data.get("content", "")))
+
+
+# ── settings ─────────────────────────────────────────────────
+
+@app.route("/api/settings", methods=["GET", "POST"])
+@_api
+def api_settings(api):
+    if request.method == "POST":
+        return jsonify(api.update_settings(request.json or {}))
+    return jsonify(api.get_settings())
+
+
+# ── automation ───────────────────────────────────────────────
+
+@app.route("/api/automation/status")
+@_api
+def api_automation_status(api):
+    return jsonify(api.get_automation_status())
+
+
+@app.route("/api/automation/execute", methods=["POST"])
+@_api
+def api_automation_execute(api):
+    data = request.json or {}
+    return jsonify(api.run_automation_tool(data.get("tool"), data.get("params", {})))
+
+
+# ── SSE real-time events ─────────────────────────────────────
+
+@app.route("/api/events")
+def api_events():
+    def generate():
+        while True:
+            data = {"vitals": _vitals(), "ts": time.time()}
+            yield f"data: {json.dumps(data)}\n\n"
+            time.sleep(2)
+    return Response(stream_with_context(generate()), mimetype="text/event-stream")
