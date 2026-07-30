@@ -85,3 +85,94 @@ def test_fade_print_can_run():
     with patch("sys.stdout.write"):
         with patch("time.sleep"):
             fade_print("hello", delay=0.001)
+
+
+# ── boot-sequence UX behavior ──────────────────────────────────────────
+
+
+def test_non_tty_prints_instant_minimal_banner(tmp_path, monkeypatch, capsys):
+    """Non-interactive output (piped/redirected/CI) must never trigger the
+    multi-second animated sequence -- it should print one line and return
+    immediately."""
+    from nexus.cli import welcome
+
+    monkeypatch.setattr(welcome.sys.stdout, "isatty", lambda: False)
+    welcome.display_welcome()
+    captured = capsys.readouterr()
+    assert "Nexus" in captured.out
+    assert "\033[" not in captured.out  # no ANSI animation codes
+
+
+def test_no_color_env_skips_animation(monkeypatch, capsys):
+    from nexus.cli import welcome
+
+    monkeypatch.setattr(welcome.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setenv("NO_COLOR", "1")
+    welcome.display_welcome()
+    captured = capsys.readouterr()
+    assert "\033[" not in captured.out
+
+
+def test_nexus_boot_off_env_skips_animation(monkeypatch, capsys):
+    from nexus.cli import welcome
+
+    monkeypatch.setattr(welcome.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setenv("NEXUS_BOOT", "off")
+    welcome.display_welcome()
+    captured = capsys.readouterr()
+    assert "\033[" not in captured.out
+
+
+def test_first_run_uses_full_sequence_and_writes_marker(tmp_path, monkeypatch):
+    from nexus.cli import welcome
+
+    monkeypatch.setattr(welcome, "_BOOT_MARKER", tmp_path / ".nexus" / ".boot_seen")
+    monkeypatch.setattr(welcome, "_is_interactive_tty", lambda: True)
+
+    called = {"full": False, "fast": False}
+    monkeypatch.setattr(welcome, "_display_full_boot", lambda: called.__setitem__("full", True))
+    monkeypatch.setattr(welcome, "_display_fast_boot", lambda: called.__setitem__("fast", True))
+
+    assert not welcome._has_seen_boot()
+    welcome.display_welcome()
+
+    assert called["full"] is True
+    assert called["fast"] is False
+    assert welcome._has_seen_boot()
+
+
+def test_repeat_run_uses_fast_sequence(tmp_path, monkeypatch):
+    from nexus.cli import welcome
+
+    marker = tmp_path / ".nexus" / ".boot_seen"
+    marker.parent.mkdir(parents=True)
+    marker.touch()
+    monkeypatch.setattr(welcome, "_BOOT_MARKER", marker)
+    monkeypatch.setattr(welcome, "_is_interactive_tty", lambda: True)
+
+    called = {"full": False, "fast": False}
+    monkeypatch.setattr(welcome, "_display_full_boot", lambda: called.__setitem__("full", True))
+    monkeypatch.setattr(welcome, "_display_fast_boot", lambda: called.__setitem__("fast", True))
+
+    welcome.display_welcome()
+
+    assert called["full"] is False
+    assert called["fast"] is True
+
+
+def test_nexus_boot_full_env_forces_full_sequence_even_if_seen(tmp_path, monkeypatch):
+    from nexus.cli import welcome
+
+    marker = tmp_path / ".nexus" / ".boot_seen"
+    marker.parent.mkdir(parents=True)
+    marker.touch()
+    monkeypatch.setattr(welcome, "_BOOT_MARKER", marker)
+    monkeypatch.setattr(welcome, "_is_interactive_tty", lambda: True)
+    monkeypatch.setenv("NEXUS_BOOT", "full")
+
+    called = {"full": False}
+    monkeypatch.setattr(welcome, "_display_full_boot", lambda: called.__setitem__("full", True))
+    monkeypatch.setattr(welcome, "_display_fast_boot", lambda: (_ for _ in ()).throw(AssertionError("should not use fast path")))
+
+    welcome.display_welcome()
+    assert called["full"] is True

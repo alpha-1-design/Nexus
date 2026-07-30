@@ -24,7 +24,11 @@ class TermuxAPI:
 
     def _detect_termux(self) -> bool:
         """Detect if running in Termux."""
-        return os.path.exists("/data/data/com.termux") or os.environ.get("TERMUX_VERSION") or os.path.exists("/system/bin/termux-api")
+        return bool(
+            os.path.exists("/data/data/com.termux")
+            or os.environ.get("TERMUX_VERSION")
+            or os.path.exists("/system/bin/termux-api")
+        )
 
     @property
     def is_available(self) -> bool:
@@ -54,7 +58,7 @@ class TermuxAPI:
 
     async def _arun(self, command: list[str], timeout: int = 10) -> tuple[bool, str]:
         """Async version of _run."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: self._run(command, timeout))
 
     # === Clipboard ===

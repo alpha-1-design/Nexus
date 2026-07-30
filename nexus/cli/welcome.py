@@ -4,6 +4,9 @@ import os
 import shutil
 import sys
 import time
+from pathlib import Path
+
+_BOOT_MARKER = Path.home() / ".nexus" / ".boot_seen"
 
 
 def clear():
@@ -68,8 +71,86 @@ def _render_subsystem(name: str, label: str, duration: float = 0.6):
     sys.stdout.flush()
 
 
-def display_welcome():
-    """Display the full animated boot sequence."""
+def _spinner(label: str, duration: float = 0.35):
+    """A single compact spinner line -- used for the fast/repeat boot path."""
+    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    steps = max(4, int(duration / 0.05))
+    for i in range(steps):
+        frame = frames[i % len(frames)]
+        sys.stdout.write(f"\r  {_color_text(frame, 36, True)} {label}")
+        sys.stdout.flush()
+        time.sleep(duration / steps)
+    sys.stdout.write(f"\r  {_color_text('✔', 32, True)} {label}\n")
+    sys.stdout.flush()
+
+
+def _is_interactive_tty() -> bool:
+    """Whether it's safe/sensible to run an animated terminal sequence.
+
+    Skips animation under: piped/redirected stdout, `NO_COLOR`, `CI`, or
+    explicit `NEXUS_BOOT=off`. Running a multi-second ANSI animation into a
+    non-TTY (a script, a log file, a CI runner) previously wasted several
+    real seconds on every invocation and dumped raw escape codes into the
+    output.
+    """
+    if os.environ.get("NEXUS_BOOT", "").lower() == "off":
+        return False
+    if os.environ.get("NO_COLOR") or os.environ.get("CI"):
+        return False
+    try:
+        return sys.stdout.isatty()
+    except Exception:
+        return False
+
+
+def _print_minimal_banner():
+    """Instant, non-animated banner for non-interactive contexts."""
+    print("Nexus Neural OS -- awaiting directive. Type /help for commands.")
+
+
+def _has_seen_boot() -> bool:
+    try:
+        return _BOOT_MARKER.exists()
+    except Exception:
+        return False
+
+
+def _mark_boot_seen():
+    try:
+        _BOOT_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        _BOOT_MARKER.touch()
+    except Exception:
+        pass
+
+
+def display_welcome(force_full: bool = False):
+    """Display the Nexus boot sequence.
+
+    The full cinematic sequence (ASCII logo + per-subsystem progress bars)
+    plays once, the first time Nexus is ever started on a machine. Every
+    launch after that uses a fast ~0.5s condensed version instead, so the
+    animation stays a delightful first impression without becoming a
+    multi-second tax on every single command. Set `NEXUS_BOOT=full` to
+    always play the full sequence, or `NEXUS_BOOT=off` to disable
+    animation entirely (also auto-disabled for non-TTY output).
+    """
+    boot_mode = os.environ.get("NEXUS_BOOT", "").lower()
+
+    if not _is_interactive_tty():
+        _print_minimal_banner()
+        return
+
+    show_full = force_full or boot_mode == "full" or not _has_seen_boot()
+
+    if show_full:
+        _display_full_boot()
+        _mark_boot_seen()
+    else:
+        _display_fast_boot()
+
+
+def _display_full_boot():
+    """The full first-run cinematic boot sequence (~1.3s)."""
     clear()
 
     logo = get_logo()
@@ -99,8 +180,10 @@ def display_welcome():
         ("BEAT", "Heartbeat service startup"),
     ]
 
+    # Condensed from the original 0.4s/step (~2.8s total) to keep the
+    # first-run "wow" moment snappy rather than a multi-second wait.
     for name, label in subsystems:
-        _render_subsystem(name, label, duration=0.4)
+        _render_subsystem(name, label, duration=0.16)
 
     print()
     line = _color_text("\u2500" * min(w - 4, 60), 90)
@@ -114,6 +197,29 @@ def display_welcome():
 
     tip = _color_text("Tip: Type /help to see all available commands.", 90)
     print(f"\n    {tip}\n")
+
+
+def _display_fast_boot():
+    """Condensed boot sequence for returning users (~0.5s total).
+
+    Keeps the same visual language (logo, spinner, welcome line) as the
+    full sequence but skips the seven sequential progress bars, since the
+    user has already seen the full show once.
+    """
+    clear()
+    print(get_logo())
+    print()
+
+    _spinner("Reconnecting neural link...", duration=0.45)
+
+    w = _get_terminal_width()
+    line = _color_text("\u2500" * min(w - 4, 60), 90)
+    print(f"\n    {line}\n")
+
+    welcome = _color_text("Welcome back to Nexus.", 36, True)
+    print(f"    {welcome}")
+    tip = _color_text("Tip: Type /help to see all available commands.", 90)
+    print(f"    {tip}\n")
 
 
 if __name__ == "__main__":

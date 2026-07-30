@@ -1,18 +1,24 @@
 """Flask web dashboard for Nexus."""
 
 import json
+import logging
 import time
 
 from flask import Flask, Response, jsonify, render_template, request, send_from_directory, stream_with_context
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
+logger = logging.getLogger(__name__)
 
 
 def _get_api():
     try:
         from nexus.dashboard.api import get_api
         return get_api()
-    except ImportError:
+    except Exception:
+        # Log the real cause (import error, etc.) instead of silently
+        # swallowing it -- a bad import here previously made every
+        # dashboard route return a generic 503 with no diagnostic trail.
+        logger.exception("Nexus dashboard API unavailable")
         return None
 
 
@@ -44,14 +50,11 @@ def _api(f):
 
 @app.route("/")
 def index():
-    api = _get_api()
-    return render_template(
-        "index.html",
-        vitals=_vitals(),
-        status=api.get_status() if api else {},
-        skills=api.get_skills() if api else [],
-        providers=api.get_providers() if api else [],
-    )
+    # The GIA dashboard is a lightweight SPA shell: all data is hydrated
+    # client-side via fetch() against the JSON API below, so this route
+    # stays instant instead of blocking page load on config/provider/skill
+    # discovery.
+    return render_template("index.html")
 
 
 @app.route("/manifest.json")
@@ -190,6 +193,89 @@ async def api_execute():
         return jsonify({"error": "No task provided"}), 400
     result = await api.run_agent_task(task)
     return jsonify(result)
+
+
+# ── chat (streaming) ─────────────────────────────────────────
+
+@app.route("/api/chat/stream", methods=["POST"])
+def api_chat_stream():
+    """Stream an assistant response token-by-token over SSE.
+
+    Bridges the async agent orchestrator (which drives an async
+    provider-streaming loop) into a synchronous Flask SSE generator via a
+    thread + queue, so the browser sees incremental `delta` events as the
+    model generates, followed by a single `done` event with the final turn
+    metadata (tool calls, duration, etc).
+    """
+    import asyncio
+    import queue
+    import threading
+
+    api = _get_api()
+    if api is None:
+        return jsonify({"error": "Nexus API not available"}), 503
+
+    data = request.json or {}
+    message = (data.get("message") or data.get("task") or "").strip()
+    if not message:
+        return jsonify({"error": "No message provided"}), 400
+
+    q: queue.Queue = queue.Queue()
+    _SENTINEL = object()
+
+    def on_chunk(text: str) -> None:
+        q.put({"type": "delta", "content": text})
+
+    def worker() -> None:
+        try:
+            result = asyncio.run(api.run_agent_task(message, stream_callback=on_chunk))
+            q.put({"type": "done", "result": result})
+        except Exception as e:  # noqa: BLE001
+            q.put({"type": "error", "error": str(e)})
+        finally:
+            q.put(_SENTINEL)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    def generate():
+        while True:
+            item = q.get()
+            if item is _SENTINEL:
+                break
+            yield f"data: {json.dumps(item)}\n\n"
+        yield "event: close\ndata: {}\n\n"
+
+    return Response(stream_with_context(generate()), mimetype="text/event-stream")
+
+
+# ── mcp marketplace ──────────────────────────────────────────
+
+@app.route("/api/mcp/catalog")
+@_api
+def api_mcp_catalog(api):
+    query = request.args.get("q", "")
+    category = request.args.get("category", "")
+    return jsonify(api.get_mcp_catalog(query, category))
+
+
+@app.route("/api/mcp/installed")
+@_api
+def api_mcp_installed(api):
+    return jsonify(api.get_installed_mcp())
+
+
+@app.route("/api/mcp/install", methods=["POST"])
+@_api
+def api_mcp_install(api):
+    data = request.json or {}
+    return jsonify(api.install_mcp(data.get("name", "")))
+
+
+@app.route("/api/mcp/uninstall", methods=["POST"])
+@_api
+def api_mcp_uninstall(api):
+    data = request.json or {}
+    return jsonify(api.uninstall_mcp(data.get("name", "")))
 
 
 # ── projects ─────────────────────────────────────────────────

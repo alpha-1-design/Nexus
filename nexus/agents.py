@@ -300,9 +300,39 @@ Use @planner or @coder to share relevant findings.""",
         self._broadcast_system(f"[spawn] {agent_name} started")
 
         if task:
-            asyncio.create_task(self._agent_task(agent, task, system_prompt_override=final_prompt))
+            self._schedule_agent_task(agent, task, system_prompt_override=final_prompt)
 
         return agent
+
+    def _schedule_agent_task(self, agent: Agent, task: str, system_prompt_override: str | None = None) -> None:
+        """Schedule the agent's task coroutine, whether or not an event loop is
+        currently running.
+
+        `spawn()` is called both from async contexts (the REPL, orchestrator)
+        where a loop is already running, and from synchronous Click CLI
+        commands where it isn't. Calling `asyncio.create_task()` with no
+        running loop raises `RuntimeError` *after* the coroutine object has
+        already been constructed, leaving it dangling and triggering a
+        "coroutine was never awaited" warning while silently dropping the
+        task. Handle both cases explicitly instead.
+        """
+        coro = self._agent_task(agent, task, system_prompt_override=system_prompt_override)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None:
+            loop.create_task(coro)
+        else:
+            # No running loop (e.g. invoked from a synchronous CLI command).
+            # Run the task to completion synchronously so the work still
+            # happens instead of being silently discarded.
+            try:
+                asyncio.run(coro)
+            except Exception as e:
+                agent.status = AgentStatus.FAILED
+                self._broadcast(agent.agent_id, agent.name, f"Task failed: {e}", "error")
 
     async def _agent_task(self, agent: Agent, task: str, system_prompt_override: str | None = None) -> None:
         """Run a task for an agent."""

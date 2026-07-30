@@ -1,217 +1,198 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Nexus Dashboard</title>
-  <meta name="theme-color" content="#ff6b00">
-  <link rel="manifest" href="/manifest.json">
-  <link rel="stylesheet" href="/static/css/style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>GIA — Nexus</title>
+<meta name="theme-color" content="#0e0e10">
+<link rel="manifest" href="/manifest.json">
+<link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
 
-<aside class="sidebar">
-  <div class="logo">NEXUS</div>
-  <div class="subtitle">Neural OS</div>
-  <nav>
-    <a href="#" class="active" data-section="overview"><span class="status-dot online" id="nav-status-dot"></span> Overview</a>
-    <a href="#" data-section="projects"><span class="status-dot online" style="background:var(--accent)"></span> Projects</a>
-    <a href="#" data-section="providers">Providers <span class="count" id="nav-providers-count">0</span></a>
-    <a href="#" data-section="tools">Tools <span class="count" id="nav-tools-count">0</span></a>
-    <a href="#" data-section="skills">Skills <span class="count" id="nav-skills-count">0</span></a>
-    <a href="#" data-section="agents">Agents <span class="count" id="nav-agents-count">0</span></a>
-    <a href="#" data-section="memory">Memory</a>
-    <a href="#" data-section="sessions">Sessions <span class="count" id="nav-sessions-count">0</span></a>
-    <a href="#" data-section="settings">Settings</a>
-    <a href="#" data-section="automation">Automation</a>
-  </nav>
-  <div style="font-size:10px;color:var(--text-muted);padding-top:16px;border-top:1px solid var(--border);">
-    v0.1.0 &middot; Apache 2.0
-  </div>
-</aside>
+<div class="app">
 
-<div class="main">
-  <div class="topbar">
-    <div class="breadcrumb">Dashboard / <span id="section-title">Overview</span></div>
-    <div class="meta">
-      <span id="header-provider">No provider</span>
-      <span id="header-time"></span>
+  <!-- ═══════════ SIDEBAR ═══════════ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-top">
+      <div class="brand">
+        <span class="brand-mark">G</span>
+        <span class="brand-name">GIA</span>
+      </div>
+      <button class="icon-btn" id="sidebar-collapse-btn" title="Collapse sidebar" aria-label="Collapse sidebar">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 5h16v2H4zm0 6h16v2H4zm0 6h16v2H4z"/></svg>
+      </button>
     </div>
-  </div>
 
-  <div class="content" id="main-content">
+    <button class="new-chat-btn" id="new-chat-btn">
+      <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      New chat
+    </button>
 
-    <!-- ═══ OVERVIEW ═══ -->
-    <section id="section-overview">
-      <div class="status-grid" id="status-grid">
-        <div class="stat-card"><div class="label">Status</div><div class="value" id="stat-status">Initializing</div></div>
-        <div class="stat-card"><div class="label">Provider</div><div class="value" id="stat-provider">—</div><div class="sub" id="stat-provider-model"></div></div>
-        <div class="stat-card"><div class="label">Tools</div><div class="value" id="stat-tools">0</div><div class="sub">registered</div></div>
-        <div class="stat-card"><div class="label">Skills</div><div class="value" id="stat-skills">0</div><div class="sub">active</div></div>
-        <div class="stat-card"><div class="label">Facts</div><div class="value" id="stat-facts">0</div><div class="sub">stored</div></div>
-        <div class="stat-card"><div class="label">Sessions</div><div class="value" id="stat-sessions">0</div></div>
+    <div class="sidebar-search">
+      <input type="text" id="session-search" placeholder="Search chats…">
+    </div>
+
+    <div class="sidebar-section-label">Recent</div>
+    <nav class="session-list" id="session-list">
+      <div class="session-empty">No conversations yet</div>
+    </nav>
+
+    <div class="sidebar-divider"></div>
+
+    <nav class="view-nav">
+      <button class="view-nav-item active" data-view="chat">
+        <svg viewBox="0 0 24 24" width="17" height="17"><path fill="currentColor" d="M4 4h16v12H7l-3 3V4z"/></svg>
+        Chat
+      </button>
+      <button class="view-nav-item" data-view="agents">
+        <svg viewBox="0 0 24 24" width="17" height="17"><circle cx="12" cy="8" r="3" fill="currentColor"/><path fill="currentColor" d="M6 20c0-3.3 2.7-6 6-6s6 2.7 6 6z"/></svg>
+        Agents <span class="pill" id="nav-agents-count">0</span>
+      </button>
+      <button class="view-nav-item" data-view="skills">
+        <svg viewBox="0 0 24 24" width="17" height="17"><path fill="currentColor" d="M12 2l2.6 6.6L21 11l-6.4 2.4L12 20l-2.6-6.6L3 11l6.4-2.4z"/></svg>
+        Skills <span class="pill" id="nav-skills-count">0</span>
+      </button>
+      <button class="view-nav-item" data-view="mcp">
+        <svg viewBox="0 0 24 24" width="17" height="17"><rect x="4" y="4" width="16" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9h6v6H9z" fill="currentColor"/></svg>
+        MCP Marketplace <span class="pill" id="nav-mcp-count">0</span>
+      </button>
+      <button class="view-nav-item" data-view="providers">
+        <svg viewBox="0 0 24 24" width="17" height="17"><path fill="currentColor" d="M12 2a5 5 0 015 5v2a5 5 0 01-10 0V7a5 5 0 015-5zm-7 18a7 7 0 0114 0z"/></svg>
+        Providers
+      </button>
+      <button class="view-nav-item" data-view="settings">
+        <svg viewBox="0 0 24 24" width="17" height="17"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path fill="none" stroke="currentColor" stroke-width="2" d="M12 2v3m0 14v3M4.2 4.2l2.1 2.1m11.4 11.4l2.1 2.1M2 12h3m14 0h3M4.2 19.8l2.1-2.1m11.4-11.4l2.1-2.1"/></svg>
+        Settings
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="vitals" id="sidebar-vitals">
+        <span id="vital-cpu">CPU —</span>
+        <span id="vital-disk">Disk —</span>
       </div>
-      <div class="panel">
-        <div class="panel-header">System Console</div>
-        <div class="terminal">
-          <div class="bar">
-            <div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
-            <div class="title">nexus-console</div>
-            <div style="margin-left:auto;font-size:9px;color:var(--text-dim)" id="console-timestamp"></div>
-          </div>
-          <div class="body" id="console-body">Initializing Nexus...</div>
-          <div class="input-row">
-            <span class="prompt">❯</span>
-            <input type="text" id="cmd-input" placeholder="Enter instruction..." autocomplete="off">
+      <div class="version">Nexus v0.1.0</div>
+    </div>
+  </aside>
+
+  <button class="mobile-menu-btn" id="mobile-menu-btn" aria-label="Open menu">
+    <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 5h16v2H4zm0 6h16v2H4zm0 6h16v2H4z"/></svg>
+  </button>
+
+  <!-- ═══════════ MAIN ═══════════ -->
+  <main class="main">
+
+    <!-- CHAT VIEW -->
+    <section class="view view-chat active" id="view-chat">
+      <header class="chat-topbar">
+        <div class="model-selector" id="model-selector">
+          <span id="active-provider-label">No provider configured</span>
+          <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M7 10l5 5 5-5z"/></svg>
+        </div>
+        <div class="topbar-right">
+          <span class="status-pill" id="connection-status"><span class="dot"></span>connecting…</span>
+        </div>
+      </header>
+
+      <div class="chat-scroll" id="chat-scroll">
+        <div class="chat-empty" id="chat-empty">
+          <div class="chat-empty-mark">G</div>
+          <h1>GIA</h1>
+          <p>Your Nexus AI coding agent. Ask anything, or hand off a task.</p>
+          <div class="suggestion-grid" id="suggestion-grid">
+            <button class="suggestion-card" data-prompt="Give me a status overview of this Nexus install.">Status overview<span>of this Nexus install</span></button>
+            <button class="suggestion-card" data-prompt="What skills do you have available right now?">What skills<span>are available right now?</span></button>
+            <button class="suggestion-card" data-prompt="Search the MCP marketplace for database tools.">Find MCP servers<span>for databases</span></button>
+            <button class="suggestion-card" data-prompt="Review this project's structure and suggest improvements.">Review this project<span>and suggest improvements</span></button>
           </div>
         </div>
+        <div class="messages" id="messages"></div>
       </div>
-    </section>
 
-    <!-- ═══ PROJECTS ═══ -->
-    <section id="section-projects" style="display:none">
-      <div class="flex items-center justify-between mb-4">
-        <div class="panel-header" style="border:none;padding:0">Project Browser</div>
-        <div class="flex gap-2">
-          <input type="text" id="project-root" value="." placeholder="Project path" style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 10px;font-family:inherit;font-size:11px;width:200px">
-          <button class="btn btn-sm" onclick="loadProjects()">Browse</button>
+      <div class="composer-wrap">
+        <div class="composer">
+          <textarea id="composer-input" placeholder="Message GIA…" rows="1"></textarea>
+          <button class="composer-send" id="composer-send" title="Send" aria-label="Send message">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 4l8 8-1.4 1.4L13 7.8V20h-2V7.8l-5.6 5.6L4 12z"/></svg>
+          </button>
         </div>
-      </div>
-      <div class="split">
-        <div class="split-left" id="project-tree"><div class="empty-state">Enter a path and click Browse</div></div>
-        <div class="split-right" id="project-editor"><div class="empty-state">Select a file to edit</div></div>
+        <div class="composer-hint">GIA can make mistakes. Verify important output.</div>
       </div>
     </section>
 
-    <!-- ═══ PROVIDERS ═══ -->
-    <section id="section-providers" style="display:none">
-      <div class="flex items-center justify-between mb-4">
-        <div class="panel-header" style="border:none;padding:0">AI Providers</div>
-        <button class="btn btn-primary btn-sm" onclick="showAddProvider()">+ Add Provider</button>
-      </div>
-      <div class="panel">
-        <div class="panel-body" id="providers-list"></div>
-      </div>
-      <div id="provider-form" class="panel" style="display:none">
-        <div class="panel-header">New Provider</div>
-        <div class="panel-body">
-          <div class="form-row"><label>Name</label><input id="prov-name" placeholder="e.g. my-openai"></div>
-          <div class="form-row"><label>Type</label>
-            <select id="prov-type">
-              <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
-              <option value="google">Google</option><option value="groq">Groq</option>
-              <option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option>
-              <option value="openrouter">OpenRouter</option><option value="together">Together</option>
-              <option value="mistral">Mistral</option>
-            </select>
-          </div>
-          <div class="form-row"><label>API Key</label><input id="prov-key" placeholder="sk-..." type="password"></div>
-          <div class="form-row"><label>Model</label><input id="prov-model" placeholder="gpt-4o"></div>
-          <div class="form-row"><label>Base URL (optional)</label><input id="prov-url" placeholder="https://api.openai.com/v1"></div>
-          <div class="flex gap-2">
-            <button class="btn btn-primary" onclick="addProvider()">Save</button>
-            <button class="btn" onclick="hideAddProvider()">Cancel</button>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ═══ TOOLS ═══ -->
-    <section id="section-tools" style="display:none">
-      <div class="panel">
-        <div class="panel-header">Available Tools</div>
-        <div class="panel-body" id="tools-list"></div>
-      </div>
-    </section>
-
-    <!-- ═══ SKILLS ═══ -->
-    <section id="section-skills" style="display:none">
-      <div class="panel">
-        <div class="panel-header">Capabilities</div>
-        <div class="panel-body" id="skills-list"></div>
-      </div>
-    </section>
-
-    <!-- ═══ AGENTS ═══ -->
-    <section id="section-agents" style="display:none">
-      <div class="flex items-center justify-between mb-4">
-        <div class="panel-header" style="border:none;padding:0">Active Agents</div>
-        <div class="flex gap-2">
-          <input type="text" id="spawn-task" placeholder="Task description" style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 10px;font-family:inherit;font-size:11px;width:240px">
-          <select id="spawn-role" style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:4px 8px;font-family:inherit;font-size:11px">
-            <option value="coder">Coder</option><option value="planner">Planner</option>
-            <option value="researcher">Researcher</option><option value="reviewer">Reviewer</option>
+    <!-- AGENTS VIEW -->
+    <section class="view view-panel" id="view-agents">
+      <header class="panel-topbar"><h2>Agents</h2><p>Multi-agent team status and spawn controls.</p></header>
+      <div class="panel-body">
+        <div class="panel-toolbar">
+          <input type="text" id="agent-task-input" placeholder="Describe a task to spawn an agent for…">
+          <select id="agent-role-select">
+            <option value="coder">Coder</option>
+            <option value="planner">Planner</option>
+            <option value="reviewer">Reviewer</option>
             <option value="tester">Tester</option>
+            <option value="researcher">Researcher</option>
+            <option value="lead">Lead</option>
           </select>
-          <button class="btn btn-primary btn-sm" onclick="spawnAgent()">Spawn</button>
+          <button class="btn-primary" id="agent-spawn-btn">Spawn agent</button>
         </div>
-      </div>
-      <div id="agents-list"></div>
-    </section>
-
-    <!-- ═══ MEMORY ═══ -->
-    <section id="section-memory" style="display:none">
-      <div class="panel">
-        <div class="panel-header">Facts &amp; Knowledge</div>
-        <div class="panel-body" id="facts-list"></div>
-      </div>
-      <div class="panel">
-        <div class="panel-header">Vector Memory</div>
-        <div class="panel-body"><span class="empty-state">Vector memory available</span></div>
+        <div class="grid" id="agents-grid"></div>
       </div>
     </section>
 
-    <!-- ═══ SESSIONS ═══ -->
-    <section id="section-sessions" style="display:none">
-      <div class="panel">
-        <div class="panel-header">Conversation Sessions</div>
-        <div class="panel-body" id="sessions-list"></div>
+    <!-- SKILLS VIEW -->
+    <section class="view view-panel" id="view-skills">
+      <header class="panel-topbar"><h2>Skills</h2><p>382+ bundled skills, ported from the community agent library.</p></header>
+      <div class="panel-body">
+        <div class="panel-toolbar">
+          <input type="text" id="skills-search" placeholder="Search skills…">
+        </div>
+        <div class="grid" id="skills-grid"></div>
       </div>
     </section>
 
-    <!-- ═══ SETTINGS ═══ -->
-    <section id="section-settings" style="display:none">
-      <div class="panel">
-        <div class="panel-header">Nexus Configuration</div>
-        <div class="panel-body">
-          <div class="form-row"><label>User Name</label><input id="set-user" placeholder="Optional"></div>
-          <div class="form-row"><label>Tool Profile</label>
-            <select id="set-profile">
-              <option value="coding">Coding</option><option value="default">Default</option>
-              <option value="minimal">Minimal</option><option value="all">All</option>
+    <!-- MCP MARKETPLACE VIEW -->
+    <section class="view view-panel" id="view-mcp">
+      <header class="panel-topbar"><h2>MCP Marketplace</h2><p>92 Model Context Protocol servers, ready to install.</p></header>
+      <div class="panel-body">
+        <div class="panel-toolbar">
+          <input type="text" id="mcp-search" placeholder="Search MCP servers…">
+          <select id="mcp-category-select"><option value="">All categories</option></select>
+        </div>
+        <div class="grid" id="mcp-grid"></div>
+      </div>
+    </section>
+
+    <!-- PROVIDERS VIEW -->
+    <section class="view view-panel" id="view-providers">
+      <header class="panel-topbar"><h2>Providers</h2><p>Configured LLM providers.</p></header>
+      <div class="panel-body">
+        <div class="grid" id="providers-grid"></div>
+      </div>
+    </section>
+
+    <!-- SETTINGS VIEW -->
+    <section class="view view-panel" id="view-settings">
+      <header class="panel-topbar"><h2>Settings</h2><p>Dashboard preferences.</p></header>
+      <div class="panel-body">
+        <div class="settings-card">
+          <div class="settings-row">
+            <div><strong>Theme</strong><div class="muted">GIA is dark by default.</div></div>
+            <select id="theme-select">
+              <option value="dark">Dark</option>
+              <option value="darker">Darker (AMOLED)</option>
             </select>
           </div>
-          <div class="form-row"><label>Search Provider</label>
-            <select id="set-search">
-              <option value="">None</option><option value="exa">Exa</option>
-              <option value="tavily">Tavily</option><option value="brave">Brave</option>
-            </select>
+          <div class="settings-row">
+            <div><strong>Stream responses</strong><div class="muted">Show tokens as they arrive.</div></div>
+            <input type="checkbox" id="stream-toggle" checked>
           </div>
-          <div class="form-row"><label>Log Level</label>
-            <select id="set-loglevel">
-              <option value="DEBUG">DEBUG</option><option value="INFO" selected>INFO</option>
-              <option value="WARNING">WARNING</option><option value="ERROR">ERROR</option>
-            </select>
-          </div>
-          <div class="form-row flex items-center gap-4">
-            <label style="margin:0"><input type="checkbox" id="set-sandbox"> Sandbox Mode</label>
-            <label style="margin:0"><input type="checkbox" id="set-termux"> Termux Mode</label>
-          </div>
-          <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
-          <span id="settings-status" class="text-sm text-dim" style="margin-left:12px"></span>
         </div>
       </div>
     </section>
 
-    <!-- ═══ AUTOMATION ═══ -->
-    <section id="section-automation" style="display:none">
-      <div class="panel">
-        <div class="panel-header">Automation Status</div>
-        <div class="panel-body" id="automation-status"></div>
-      </div>
-    </section>
-
-  </div>
+  </main>
 </div>
 
 <script src="/static/js/app.js"></script>

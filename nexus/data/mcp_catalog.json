@@ -1,0 +1,1011 @@
+{
+  "@microsoft/clarity-mcp-server": {
+    "args": [
+      "@microsoft/clarity-mcp-server",
+      "--clarity_api_token=your-api-token-here"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "",
+    "transport": "stdio"
+  },
+  "DeepGraph Next.js MCP": {
+    "args": [
+      "-y",
+      "mcp-code-graph@latest",
+      "vercel/next.js"
+    ],
+    "category": "deepgraph",
+    "command": "npx",
+    "description": "Deep code analysis and visualization for Next.js projects. Understand component relationships, dependencies, and architecture patterns.",
+    "transport": "stdio"
+  },
+  "DeepGraph React MCP": {
+    "args": [
+      "-y",
+      "mcp-code-graph@latest",
+      "facebook/react"
+    ],
+    "category": "deepgraph",
+    "command": "npx",
+    "description": "Analyze React component hierarchies, state flows, and dependencies. Visualize your React application architecture.",
+    "transport": "stdio"
+  },
+  "DeepGraph TypeScript MCP": {
+    "args": [
+      "-y",
+      "mcp-code-graph@latest",
+      "microsoft/TypeScript"
+    ],
+    "category": "deepgraph",
+    "command": "npx",
+    "description": "Comprehensive TypeScript code analysis with type mapping, interface relationships, and module dependency tracking.",
+    "transport": "stdio"
+  },
+  "DeepGraph Vue MCP": {
+    "args": [
+      "-y",
+      "mcp-code-graph@latest",
+      "vuejs/core"
+    ],
+    "category": "deepgraph",
+    "command": "npx",
+    "description": "Analyze Vue.js applications including component composition, reactive data flow, and template-script relationships.",
+    "transport": "stdio"
+  },
+  "DevBox": {
+    "args": [
+      "-y",
+      "@microsoft/devbox-mcp@latest"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "This server enables natural language interactions for developer-focused operations like managing Dev Boxes, configurations, and pools.",
+    "transport": "stdio"
+  },
+  "Figma Dev Mode MCP": {
+    "category": "devtools",
+    "description": "The Dev Mode MCP server brings Figma directly into your workflow by providing important design information and context to AI agents generating code from Figma design files.",
+    "transport": "sse",
+    "url": "http://127.0.0.1:3845/mcp"
+  },
+  "LaunchDarkly": {
+    "args": [
+      "-y",
+      "--package",
+      "@launchdarkly/mcp-server",
+      "--",
+      "mcp",
+      "start",
+      "--api-key",
+      "api-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "Official LaunchDarkly MCP Server for feature flag management and experimentation. Enables AI agents to interact with LaunchDarkly APIs for managing feature flags, AI configs, targeting rules, and gradual rollouts across multiple environments.",
+    "transport": "stdio"
+  },
+  "MongoDB": {
+    "args": [
+      "-y",
+      "mongodb-mcp-server@latest",
+      "--readOnly"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "A Model Context Protocol server to connect to MongoDB databases and MongoDB Atlas Clusters.",
+    "env_vars": [
+      "MDB_MCP_CONNECTION_STRING"
+    ],
+    "transport": "stdio"
+  },
+  "Neon": {
+    "args": [
+      "-y",
+      "mcp-remote",
+      "https://mcp.neon.tech/mcp"
+    ],
+    "category": "database",
+    "command": "npx",
+    "description": "MCP server for interacting with Neon Management API and databases",
+    "transport": "stdio"
+  },
+  "Railway": {
+    "args": [
+      "-y",
+      "@railway/mcp-server"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "Railway MCP server provides seamless integration with Railway's deployment platform, enabling Claude to manage projects, deployments, and infrastructure directly from the CLI.",
+    "transport": "stdio"
+  },
+  "TestSprite": {
+    "args": [
+      "@testsprite/testsprite-mcp@latest"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "TestSprite\u2019s MCP reads your intent, tests your code, and tells you what to fix.",
+    "env_vars": [
+      "API_KEY"
+    ],
+    "transport": "stdio"
+  },
+  "aks": {
+    "args": [
+      "--transport",
+      "stdio"
+    ],
+    "category": "devtools",
+    "command": "<path of binary aks-mcp>",
+    "description": "The AKS-MCP is a Model Context Protocol (MCP) server that enables AI assistants to interact with Azure Kubernetes Service (AKS) clusters. It serves as a bridge between AI tools (like GitHub Copilot, Claude, and other MCP-compatible AI assistants) and AKS, translating natural language requests into AKS operations and returning the results in a format the AI tools can understand.",
+    "transport": "stdio"
+  },
+  "alpaca-trading": {
+    "args": [
+      "alpaca-mcp-server"
+    ],
+    "category": "integration",
+    "command": "uvx",
+    "description": "Trading platform MCP server enabling stock, ETF, crypto, and options trading via Alpaca's API. Supports market data, portfolio management, and order execution.",
+    "env_vars": [
+      "ALPACA_API_KEY",
+      "ALPACA_SECRET_KEY"
+    ],
+    "transport": "stdio"
+  },
+  "android-mcp": {
+    "args": [
+      "--python",
+      "3.13",
+      "android-mcp"
+    ],
+    "category": "devtools",
+    "command": "uvx",
+    "description": "MCP Server for interacting with Android devices. Control, inspect, and automate Android devices via ADB through Claude.",
+    "transport": "stdio"
+  },
+  "apify": {
+    "args": [
+      "-y",
+      "@apify/actors-mcp-server"
+    ],
+    "category": "web-data",
+    "command": "npx",
+    "description": "Extract data from social media, search engines, maps, and e-commerce sites using Apify's ready-made scrapers and actors via MCP.",
+    "env_vars": [
+      "APIFY_TOKEN"
+    ],
+    "transport": "stdio"
+  },
+  "arxiv-mcp-server": {
+    "args": [
+      "arxiv-mcp-server"
+    ],
+    "category": "research",
+    "command": "uvx",
+    "description": "Search, download, and analyze academic papers from arXiv. Supports full-text search, paper retrieval, and local storage for research workflows.",
+    "transport": "stdio"
+  },
+  "automatalabs-playwright-server": {
+    "args": [
+      "-y",
+      "@automatalabs/mcp-server-playwright"
+    ],
+    "category": "browser_automation",
+    "command": "npx",
+    "description": "A Model Context Protocol server that provides browser automation capabilities using Playwright",
+    "transport": "stdio"
+  },
+  "bitbucket": {
+    "args": [
+      "-y",
+      "@aashari/mcp-server-atlassian-bitbucket"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "A Node.js/TypeScript Model Context Protocol (MCP) server for Atlassian Bitbucket Cloud. Enables AI systems (e.g., LLMs like Claude or Cursor AI) to securely interact with your repositories, pull requests, workspaces, and code in real time.",
+    "transport": "stdio"
+  },
+  "brightdata": {
+    "category": "web-data",
+    "description": "Bright Data MCP server providing 60+ tools for web search, scraping, structured data extraction, and browser automation across major platforms",
+    "transport": "sse",
+    "url": "https://mcp.brightdata.com/mcp?token=YOUR_BRIGHTDATA_API_TOKEN&pro=1"
+  },
+  "browser-server": {
+    "args": [
+      "run",
+      "server",
+      "--port",
+      "8000",
+      "--stdio",
+      "--proxy-port",
+      "9000"
+    ],
+    "category": "browser_automation",
+    "command": "browser-use-mcp-server",
+    "description": "An MCP server that enables AI agents to control web browsers using browser-use.",
+    "env_vars": [
+      "OPENAI_API_KEY"
+    ],
+    "transport": "stdio"
+  },
+  "browseract": {
+    "args": [
+      "-y",
+      "browseract-mcp"
+    ],
+    "category": "web-data",
+    "command": "npx",
+    "description": "BrowserAct cloud browser automation for structured data extraction from Amazon, YouTube, Google Maps, Google News, Reddit, WeChat, Zhihu and more",
+    "env_vars": [
+      "BROWSERACT_API_KEY"
+    ],
+    "transport": "stdio"
+  },
+  "browserbase": {
+    "args": [
+      "@browserbasehq/mcp-server-browserbase"
+    ],
+    "category": "browser_automation",
+    "command": "npx",
+    "description": "This server provides cloud browser automation capabilities using Browserbase and Stagehand. It enables LLMs to interact with web pages, take screenshots, extract information, and perform automated actions with atomic precision.",
+    "env_vars": [
+      "BROWSERBASE_API_KEY",
+      "BROWSERBASE_PROJECT_ID",
+      "GEMINI_API_KEY"
+    ],
+    "transport": "stdio"
+  },
+  "browsermcp": {
+    "args": [
+      "@browsermcp/mcp@latest"
+    ],
+    "category": "browser_automation",
+    "command": "npx",
+    "description": "With Browser MCP, you can use MCP to automate your browser so that AI applications can navigate the web, fill out forms, and more.",
+    "transport": "stdio"
+  },
+  "chrome-devtools": {
+    "args": [
+      "-y",
+      "chrome-devtools-mcp@latest"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "A Model Context Protocol server for interacting with Chrome DevTools, enabling browser automation, debugging, and performance analysis capabilities.",
+    "transport": "stdio"
+  },
+  "circleci-mcp-server": {
+    "args": [
+      "-y",
+      "@circleci/mcp-server-circleci"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "Integrate CircleCI build and deployment pipeline management with your Claude Code workflow. Monitor builds, trigger deployments, and access project insights.",
+    "env_vars": [
+      "CIRCLECI_TOKEN",
+      "CIRCLECI_BASE_URL"
+    ],
+    "transport": "stdio"
+  },
+  "codacy": {
+    "args": [
+      "-y",
+      "@codacy/codacy-mcp"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "MCP Server for the Codacy API, enabling access to repositories, files, quality, coverage, security and more.",
+    "env_vars": [
+      "CODACY_ACCOUNT_TOKEN"
+    ],
+    "transport": "stdio"
+  },
+  "context7": {
+    "args": [
+      "-y",
+      "@upstash/context7-mcp@latest"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "Context7 by Upstash pulls up-to-date, version-specific documentation and code examples straight from the source and injects them into your prompt. Add 'use context7' to any prompt to activate.",
+    "env_vars": [
+      "CONTEXT7_API_KEY"
+    ],
+    "transport": "stdio"
+  },
+  "datalikers": {
+    "category": "web-data",
+    "description": "DataLikers hosted MCP \u2014 50+ Instagram & TikTok data tools: user search by demographics (gender, age, country, city), engagement analytics, posts, comments, hashtags, stories, highlights and trending tracks. Get an API key at https://datalikers.com/tokens (100 free requests on signup, no credit card). Prefer a local server? Run `npx -y datalikers-mcp` with DATALIKERS_API_KEY instead.",
+    "transport": "sse",
+    "url": "https://mcp.datalikers.com/mcp/"
+  },
+  "dbhub": {
+    "args": [
+      "-y",
+      "@bytebase/dbhub@latest"
+    ],
+    "category": "database",
+    "command": "npx",
+    "description": "Zero-dependency, token-efficient database MCP server supporting PostgreSQL, MySQL, MariaDB, SQL Server, and SQLite connections.",
+    "env_vars": [
+      "DATABASE_DSN"
+    ],
+    "transport": "stdio"
+  },
+  "devplan": {
+    "category": "devtools",
+    "description": "",
+    "transport": "sse",
+    "url": "https://mcp.devplanmcp.store/sse"
+  },
+  "dynatrace-mcp-server": {
+    "args": [
+      "-y",
+      "@dynatrace-oss/dynatrace-mcp-server@latest"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "Manage and interact with the Dynatrace Platform for real-time observability and monitoring.",
+    "env_vars": [
+      "DT_PLATFORM_TOKEN",
+      "DT_ENVIRONMENT"
+    ],
+    "transport": "stdio"
+  },
+  "elasticsearch-mcp-server": {
+    "args": [
+      "run",
+      "-i",
+      "--rm",
+      "-e",
+      "ES_URL",
+      "-e",
+      "ES_API_KEY",
+      "docker.elastic.co/mcp/elasticsearch",
+      "stdio"
+    ],
+    "category": "devtools",
+    "command": "docker",
+    "description": "MCP server for connecting to Elasticsearch data and indices. Supports search queries, mappings, ES|QL, and shard information through natural language interactions.",
+    "env_vars": [
+      "ES_URL",
+      "ES_API_KEY"
+    ],
+    "transport": "stdio"
+  },
+  "elevenlabs": {
+    "args": [
+      "elevenlabs-mcp"
+    ],
+    "category": "audio",
+    "command": "uvx",
+    "description": "Official ElevenLabs MCP for text-to-speech, voice cloning, audio processing, and transcription. Generate AI voices, design custom voices, isolate audio, create sound effects, and more.",
+    "env_vars": [
+      "ELEVENLABS_API_KEY",
+      "ELEVENLABS_MCP_BASE_PATH",
+      "ELEVENLABS_MCP_OUTPUT_MODE"
+    ],
+    "transport": "stdio"
+  },
+  "executeautomation-playwright-server": {
+    "args": [
+      "-y",
+      "@executeautomation/playwright-mcp-server"
+    ],
+    "category": "browser_automation",
+    "command": "npx",
+    "description": "A Model Context Protocol server that provides browser automation capabilities using Playwright. This server enables LLMs to interact with web pages, take screenshots, generate test code, web scraps the page and execute JavaScript in a real browser environment.",
+    "transport": "stdio"
+  },
+  "explorium": {
+    "category": "web-data",
+    "description": "Explorium MCP \u2014 live B2B company and contact data (150M+ businesses, 800M+ professionals, 4,000+ signals, 50+ data sources) for lead-list building, prospect enrichment, executive discovery, firmographics, technographics, funding signals, and multi-step GTM workflows. Supports two auth modes: (1) API key \u2014 set it in the api_key header below (get one at https://developers.explorium.ai/reference/setup/getting_your_api_key), or (2) OAuth \u2014 remove the headers block and the MCP client will trigger a browser sign-in on first use.",
+    "transport": "sse",
+    "url": "https://mcp.explorium.ai/mcp"
+  },
+  "fb-ads-mcp-server": {
+    "args": [
+      "/path/to/your/fb-ads-mcp-server/server.py",
+      "--fb-token",
+      "YOUR_META_ACCESS_TOKEN"
+    ],
+    "category": "marketing",
+    "command": "python",
+    "description": "This project provides an MCP server acting as an interface to the Meta Ads, enabling programmatic access to Meta Ads data and management features.",
+    "transport": "stdio"
+  },
+  "fetch": {
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-fetch"
+    ],
+    "category": "web",
+    "command": "npx",
+    "description": "Web content fetching and data extraction capabilities. Access external APIs, scrape web content, and integrate external data sources.",
+    "transport": "stdio"
+  },
+  "filesystem": {
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-filesystem",
+      "/path/to/allowed/files"
+    ],
+    "category": "filesystem",
+    "command": "npx",
+    "description": "Secure filesystem access for Claude Code with configurable directory permissions and file operations.",
+    "transport": "stdio"
+  },
+  "firecrawl-mcp": {
+    "args": [
+      "-y",
+      "firecrawl-mcp"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "A Model Context Protocol (MCP) server implementation that integrates with Firecrawl for web scraping capabilities.",
+    "env_vars": [
+      "FIRECRAWL_API_KEY"
+    ],
+    "transport": "stdio"
+  },
+  "firefly": {
+    "args": [
+      "-y",
+      "@fireflyai/firefly-mcp"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "Connect to Firefly AI services for advanced AI-powered development assistance, code analysis, and intelligent suggestions directly in your Claude Code environment.",
+    "env_vars": [
+      "FIREFLY_ACCESS_KEY",
+      "FIREFLY_SECRET_KEY"
+    ],
+    "transport": "stdio"
+  },
+  "footballbin-predictions": {
+    "category": "integration",
+    "description": "AI-powered football match predictions for Premier League and Champions League. Returns half-time scores, full-time scores, next goal scorer, corner counts, and key player analysis. Public endpoint, no API key required.",
+    "transport": "sse",
+    "url": "https://ru7m5svay1.execute-api.eu-central-1.amazonaws.com/prod/mcp"
+  },
+  "github": {
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-github"
+    ],
+    "category": "integration",
+    "command": "npx",
+    "description": "Direct GitHub API integration for repository management, issue tracking, pull requests, and collaborative development workflows.",
+    "env_vars": [
+      "GITHUB_PERSONAL_ACCESS_TOKEN"
+    ],
+    "transport": "stdio"
+  },
+  "github-official": {
+    "args": [
+      "run",
+      "-i",
+      "--rm",
+      "-e",
+      "GITHUB_PERSONAL_ACCESS_TOKEN",
+      "ghcr.io/github/github-mcp-server"
+    ],
+    "category": "devtools",
+    "command": "docker",
+    "description": "GitHub's official MCP Server. Interact with GitHub repositories, issues, pull requests, and more directly from Claude.",
+    "env_vars": [
+      "GITHUB_PERSONAL_ACCESS_TOKEN"
+    ],
+    "transport": "stdio"
+  },
+  "google-ads": {
+    "args": [
+      "/full/path/to/your/project/server.py"
+    ],
+    "category": "marketing",
+    "command": "/full/path/to/your/project/.venv/bin/python",
+    "description": "A FastMCP-powered Model Context Protocol server for Google Ads API integration with automatic OAuth 2.0 authentication",
+    "transport": "stdio"
+  },
+  "google-workspace": {
+    "args": [
+      "workspace-mcp"
+    ],
+    "category": "productivity",
+    "command": "uvx",
+    "description": "Control Gmail, Google Calendar, Docs, Sheets, Slides, Chat, Forms, Tasks, Search, and Drive with AI via Google Workspace MCP.",
+    "env_vars": [
+      "GOOGLE_OAUTH_CLIENT_ID",
+      "GOOGLE_OAUTH_CLIENT_SECRET"
+    ],
+    "transport": "stdio"
+  },
+  "grafana": {
+    "args": [],
+    "category": "devtools",
+    "command": "mcp-grafana",
+    "description": "A Model Context Protocol server for interacting with Grafana dashboards and monitoring. Supports both self-hosted Grafana instances and Grafana Cloud.",
+    "env_vars": [
+      "GRAFANA_URL",
+      "GRAFANA_SERVICE_ACCOUNT_TOKEN",
+      "GRAFANA_USERNAME",
+      "GRAFANA_PASSWORD"
+    ],
+    "transport": "stdio"
+  },
+  "hikerapi": {
+    "args": [
+      "-y",
+      "hikerapi-mcp"
+    ],
+    "category": "web-data",
+    "command": "npx",
+    "description": "HikerAPI MCP \u2014 Instagram data API with 105+ read-only tools auto-generated from the OpenAPI spec: profiles, posts, reels, stories, highlights, hashtags, locations, followers and comments. Get an API key at https://hikerapi.com/tokens (100 free requests on signup, no credit card).",
+    "env_vars": [
+      "HIKERAPI_KEY"
+    ],
+    "transport": "stdio"
+  },
+  "huggingface": {
+    "category": "devtools",
+    "description": "Access Hugging Face models, datasets, Spaces, papers, collections via MCP.",
+    "transport": "sse",
+    "url": "https://huggingface.co/mcp"
+  },
+  "imagesorcery-mcp": {
+    "args": [],
+    "category": "devtools",
+    "command": "imagesorcery-mcp",
+    "description": "An MCP server providing tools for image processing operations",
+    "transport": "stdio"
+  },
+  "ios-simulator": {
+    "args": [
+      "-y",
+      "ios-simulator-mcp"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "Control iOS Simulator directly from Claude Code. Launch apps, take screenshots, manage device states, and streamline mobile development workflows.",
+    "transport": "stdio"
+  },
+  "jfrog": {
+    "category": "devtools",
+    "description": "JFrog MCP Server: providing your agents with direct access to JFrog Platform services.",
+    "transport": "sse",
+    "url": "https://<\u200b\u200bJFROG_PLATFORM_URL\u200b\u200b>/mcp"
+  },
+  "jina-ai": {
+    "args": [
+      "-y",
+      "mcp-remote",
+      "https://mcp.jina.ai/v1"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "Official Jina AI MCP Server for web reading, search, grounding, and fact-checking capabilities powered by Jina AI APIs.",
+    "env_vars": [
+      "JINA_API_KEY"
+    ],
+    "transport": "stdio"
+  },
+  "jupyter": {
+    "args": [
+      "jupyter-mcp-server@latest"
+    ],
+    "category": "devtools",
+    "command": "uvx",
+    "description": "Model Context Protocol server for Jupyter notebooks. Execute code, manage notebooks, and interact with Jupyter kernels directly from Claude.",
+    "env_vars": [
+      "JUPYTER_URL",
+      "JUPYTER_TOKEN"
+    ],
+    "transport": "stdio"
+  },
+  "just-mcp": {
+    "args": [
+      "--stdio"
+    ],
+    "category": "devtools",
+    "command": "/path/to/just-mcp",
+    "description": "Execute Just commands and task runners seamlessly from Claude Code. Manage project tasks, run build scripts, and automate development workflows with Just integration.",
+    "transport": "stdio"
+  },
+  "lamatok": {
+    "args": [
+      "-y",
+      "lamatok-mcp"
+    ],
+    "category": "web-data",
+    "command": "npx",
+    "description": "LamaTok MCP \u2014 TikTok data API tools auto-generated from the OpenAPI spec: users, videos, hashtags, comments, followers/following, playlists, search, plus music and watermark-free video downloads. Get an API key at https://lamatok.com (100 free requests on signup, no credit card).",
+    "env_vars": [
+      "LAMATOK_KEY"
+    ],
+    "transport": "stdio"
+  },
+  "leetcode": {
+    "args": [],
+    "category": "devtools",
+    "command": "mcp-server-leetcode",
+    "description": "A Model Context Protocol (MCP) server for LeetCode that enables AI assistants to access LeetCode problems, user information, and contest data.",
+    "transport": "stdio"
+  },
+  "logfire": {
+    "args": [
+      "logfire-mcp@latest",
+      "--read-token=YOUR-TOKEN"
+    ],
+    "category": "devtools",
+    "command": "uvx",
+    "description": "Provides access to OpenTelemetry traces and metrics through Logfire.",
+    "transport": "stdio"
+  },
+  "markitdown": {
+    "args": [
+      "run",
+      "--rm",
+      "-i",
+      "markitdown-mcp:latest"
+    ],
+    "category": "devtools",
+    "command": "docker",
+    "description": "Convert various file formats (PDF, Word, Excel, images, audio) to Markdown.",
+    "transport": "stdio"
+  },
+  "mcp-server-box": {
+    "args": [
+      "--directory",
+      "/path/to/mcp-server-box",
+      "run",
+      "src/mcp_server_box.py"
+    ],
+    "category": "devtools",
+    "command": "uv",
+    "description": "The Box MCP Server is a Python project that integrates with the Box API to perform various operations such as file search, text extraction, AI-based querying, and data extraction. It leverages the box-sdk-gen library and provides a set of tools to interact with Box files and folders.",
+    "transport": "stdio"
+  },
+  "mcp-server-nia": {
+    "args": [
+      "run",
+      "--no-cache",
+      "nia-mcp-server"
+    ],
+    "category": "deepresearch",
+    "command": "pipx",
+    "description": "",
+    "env_vars": [
+      "NIA_API_KEY",
+      "NIA_API_URL"
+    ],
+    "transport": "stdio"
+  },
+  "memex": {
+    "args": [
+      "-y",
+      "stifler-memex-mcp",
+      "serve",
+      "--repo",
+      "."
+    ],
+    "category": "integration",
+    "command": "npx",
+    "description": "Developer context continuity for AI coding agents. Watches your git repos and builds a temporal knowledge graph of modules, symbols, decisions, and open problems via Graphiti + Neo4j, then serves it over MCP. Every edge carries a validity window and a confidence score that decays over time. 12 tools across read and write. Requires NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, and GEMINI_API_KEY (set in your repo's .env).",
+    "transport": "stdio"
+  },
+  "memory": {
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-memory"
+    ],
+    "category": "integration",
+    "command": "npx",
+    "description": "Persistent memory and context management for Claude Code sessions. Store and recall information across conversations and projects.",
+    "transport": "stdio"
+  },
+  "mermaid": {
+    "args": [
+      "-y",
+      "mcp-mermaid"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "Generate Mermaid diagrams and charts dynamically with AI. Create flowcharts, sequence diagrams, class diagrams, and more via MCP.",
+    "transport": "stdio"
+  },
+  "monday-api-mcp": {
+    "args": [
+      "@mondaydotcomorg/monday-api-mcp",
+      "-t",
+      "your_monday_api_token"
+    ],
+    "category": "productivity",
+    "command": "npx",
+    "description": "Enable AI agents to operate reliably within real workflows. This MCP is monday.com's open framework for connecting agents into your work OS - giving them secure access to structured data, tools to take action, and the context needed to make smart decisions.",
+    "transport": "stdio"
+  },
+  "mongodb-official": {
+    "args": [
+      "-y",
+      "mongodb-mcp-server@latest"
+    ],
+    "category": "database",
+    "command": "npx",
+    "description": "Official MongoDB MCP Server by MongoDB. Connect to MongoDB databases and Atlas clusters for querying, aggregation, and collection management.",
+    "env_vars": [
+      "MDB_MCP_CONNECTION_STRING"
+    ],
+    "transport": "stdio"
+  },
+  "mysql": {
+    "args": [
+      "mcp-server-mysql"
+    ],
+    "category": "database",
+    "command": "uvx",
+    "description": "Connect to MySQL databases for direct data access, queries, and database management within Claude Code workflows.",
+    "env_vars": [
+      "MYSQL_CONNECTION_STRING"
+    ],
+    "transport": "stdio"
+  },
+  "n8n-mcp": {
+    "args": [
+      "-y",
+      "n8n-mcp"
+    ],
+    "category": "integration",
+    "command": "npx",
+    "description": "Build and manage n8n workflows directly from Claude. Includes a pre-built database with all n8n node documentation for workflow automation.",
+    "env_vars": [
+      "MCP_MODE"
+    ],
+    "transport": "stdio"
+  },
+  "nika": {
+    "args": [
+      "mcp"
+    ],
+    "category": "devtools",
+    "command": "nika",
+    "description": "Read-only oracle for Nika AI workflows (.nika.yaml): validate a workflow, get findings explained with fix guidance, browse schema and examples, and see an honest cost estimate \u2014 all before a single token is spent. No execution and no mutation over MCP by design. Requires the nika binary (brew install supernovae-st/tap/nika).",
+    "transport": "stdio"
+  },
+  "notionApi": {
+    "args": [
+      "-y",
+      "@notionhq/notion-mcp-server"
+    ],
+    "category": "productivity",
+    "command": "npx",
+    "description": "Official MCP server for Notion API",
+    "env_vars": [
+      "NOTION_TOKEN"
+    ],
+    "transport": "stdio"
+  },
+  "playwright-server": {
+    "args": [
+      "@playwright/mcp@latest"
+    ],
+    "category": "browser_automation",
+    "command": "npx",
+    "description": "A Model Context Protocol (MCP) server that provides browser automation capabilities using Playwright. This server enables LLMs to interact with web pages through structured accessibility snapshots, bypassing the need for screenshots or visually-tuned models.",
+    "transport": "stdio"
+  },
+  "postgres-documentation": {
+    "category": "database",
+    "description": "PostgreSQL documentation and skills for writing better Postgres code",
+    "transport": "sse",
+    "url": "https://mcp.tigerdata.com/docs"
+  },
+  "postgresql": {
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-postgres"
+    ],
+    "category": "database",
+    "command": "npx",
+    "description": "Connect to PostgreSQL databases for advanced data operations, complex queries, and enterprise database management.",
+    "env_vars": [
+      "POSTGRES_CONNECTION_STRING"
+    ],
+    "transport": "stdio"
+  },
+  "posthell": {
+    "category": "marketing",
+    "description": "posthell - social media scheduler for AI agents. Shape rough notes into posts in your voice, queue drafts for human approval, read growth analytics, and (per-key opt-in) publish to 15 networks (X, LinkedIn, Instagram, TikTok, and more). Hosted remote server; create your API key in the posthell dashboard (https://www.posthell.com/mcp).",
+    "transport": "sse",
+    "url": "https://www.posthell.com/api/mcp"
+  },
+  "postman-api-http-server": {
+    "category": "devtools",
+    "description": "Postman's MCP server connects AI agents, assistants, and chatbots directly to your APIs on Postman. Use natural language to prompt AI to automate work across your Postman collections, environments, workspaces, and more.",
+    "transport": "sse",
+    "url": "https://mcp.postman.com/{minimal | mcp}"
+  },
+  "pulumi": {
+    "args": [
+      "-y",
+      "@pulumi/mcp-server@latest",
+      "stdio"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "The Pulumi Model Context Protocol (MCP) server enables advanced Infrastructure as Code development capabilities for connected agents, providing tools for cloud resource discovery and management using Pulumi Cloud and the Pulumi CLI.",
+    "transport": "stdio"
+  },
+  "redis": {
+    "args": [
+      "--from",
+      "redis-mcp-server@latest",
+      "redis-mcp-server"
+    ],
+    "category": "database",
+    "command": "uvx",
+    "description": "Official Redis MCP Server providing natural language interface for Redis databases. Query, manage, and interact with Redis data through Claude.",
+    "env_vars": [
+      "REDIS_URL"
+    ],
+    "transport": "stdio"
+  },
+  "searxng": {
+    "args": [
+      "-y",
+      "mcp-searxng"
+    ],
+    "category": "web",
+    "command": "npx",
+    "description": "MCP Server for SearXNG, a privacy-respecting metasearch engine. Perform web searches across multiple search engines without tracking.",
+    "env_vars": [
+      "SEARXNG_URL"
+    ],
+    "transport": "stdio"
+  },
+  "sentry": {
+    "args": [
+      "-y",
+      "@sentry/mcp-server@latest"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "Official Sentry MCP Server (local). Run Sentry integration locally via npx for debugging, error tracking, and performance monitoring.",
+    "env_vars": [
+      "SENTRY_ACCESS_TOKEN"
+    ],
+    "transport": "stdio"
+  },
+  "sentry-sentry": {
+    "category": "devtools",
+    "description": "This service implements the Model Context Protocol (MCP) for interacting with Sentry, focused on human-in-the-loop coding agents and developer workflows rather than general-purpose API access.",
+    "transport": "sse",
+    "url": "https://mcp.sentry.dev/mcp"
+  },
+  "serena": {
+    "args": [
+      "run",
+      "--directory",
+      "/abs/path/to/serena",
+      "serena",
+      "start-mcp-server"
+    ],
+    "category": "devtools",
+    "command": "/abs/path/to/uv",
+    "description": "Semantic code retrieval & editing tools for coding agents.",
+    "transport": "stdio"
+  },
+  "stripe": {
+    "args": [
+      "-y",
+      "@stripe/mcp",
+      "--tools=all"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "Let your AI agents interact with the Stripe API by using our MCP server.",
+    "env_vars": [
+      "STRIPE_SECRET_KEY"
+    ],
+    "transport": "stdio"
+  },
+  "supabase": {
+    "args": [
+      "-y",
+      "@supabase/mcp-server-supabase@latest",
+      "--read-only",
+      "--project-ref=<project-ref>"
+    ],
+    "category": "database",
+    "command": "npx",
+    "description": "Connect your Claude Code to Supabase using MCP",
+    "env_vars": [
+      "SUPABASE_ACCESS_TOKEN"
+    ],
+    "transport": "stdio"
+  },
+  "terraform": {
+    "args": [
+      "run",
+      "-i",
+      "--rm",
+      "hashicorp/terraform-mcp-server:0.2.3"
+    ],
+    "category": "devtools",
+    "command": "docker",
+    "description": "The Terraform MCP Server is a Model Context Protocol (MCP) server that provides seamless integration with Terraform Registry APIs, enabling advanced automation and interaction capabilities for Infrastructure as Code (IaC) development.",
+    "transport": "stdio"
+  },
+  "tinyfish": {
+    "category": "web",
+    "description": "TinyFish Web Agent - Web browsing and data extraction via MCP with real-time progress streaming, async tasks, and stealth browser profiles. Requires a TinyFish account (tinyfish.ai) with active subscription. Uses OAuth 2.1 authentication.",
+    "transport": "sse",
+    "url": "https://agent.tinyfish.ai/mcp"
+  },
+  "trace-mcp": {
+    "args": [
+      "-y",
+      "trace-mcp@latest"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "Framework-aware code intelligence \u2014 semantic navigation, impact analysis, and refactoring across 60 framework integrations and 81 languages with up to 99% token reduction.",
+    "transport": "stdio"
+  },
+  "trello": {
+    "args": [
+      "@delorenj/mcp-server-trello"
+    ],
+    "category": "devtools",
+    "command": "pnpx",
+    "description": "",
+    "env_vars": [
+      "TRELLO_API_KEY",
+      "TRELLO_TOKEN"
+    ],
+    "transport": "stdio"
+  },
+  "web-reader": {
+    "category": "web",
+    "description": "Web Reader MCP Server - Z.AI implementation based on the Model Context Protocol (MCP). Provides Claude Code, Cline, and other MCP-compatible clients with powerful web content extraction capabilities, including full-page content retrieval and structured data extraction.",
+    "transport": "sse",
+    "url": "https://api.z.ai/api/mcp/web_reader/mcp"
+  },
+  "web-search-prime": {
+    "category": "web",
+    "description": "Web Search MCP Server - Z.AI search capability implementation based on the Model Context Protocol (MCP), providing powerful Z.AI search capabilities for MCP-compatible clients such as Claude Code and Cline, including web search, real-time information retrieval, and other features.",
+    "transport": "sse",
+    "url": "https://api.z.ai/api/mcp/web_search_prime/mcp"
+  },
+  "webflow": {
+    "args": [],
+    "category": "devtools",
+    "command": "npx mcp-remote https://mcp.webflow.com/sse",
+    "description": "Enable AI agents to interact with Webflow APIs.",
+    "transport": "stdio"
+  },
+  "zai-mcp-server": {
+    "args": [
+      "-y",
+      "@z_ai/mcp-server"
+    ],
+    "category": "devtools",
+    "command": "npx",
+    "description": "Vision MCP Server - Z.AI capability implementation based on the Model Context Protocol (MCP), providing powerful Z.AI GLM-4.6V capabilities for MCP-compatible clients such as Claude Code and Cline, including image analysis, video understanding, and other features.",
+    "env_vars": [
+      "Z_AI_API_KEY",
+      "Z_AI_MODE"
+    ],
+    "transport": "stdio"
+  },
+  "zread": {
+    "category": "web",
+    "description": "Zread MCP Server - Z.AI implementation based on the Model Context Protocol (MCP). Powered by zread.ai, it provides Claude Code, Cline, and other MCP-compatible clients with knowledge documentation and code access capabilities for open source repositories.",
+    "transport": "sse",
+    "url": "https://api.z.ai/api/mcp/zread/mcp"
+  }
+}

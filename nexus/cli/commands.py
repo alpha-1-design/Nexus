@@ -1318,6 +1318,121 @@ def mcp_add(name: str, command: str | None, args: str | None, url: str | None, t
     click.echo(f"Added MCP server: {name}")
 
 
+def _load_mcp_catalog() -> dict:
+    """Load the bundled MCP marketplace catalog (ported from
+    claude-code-templates: https://github.com/davila7/claude-code-templates).
+    """
+    import json
+    catalog_path = Path(__file__).parent.parent / "data" / "mcp_catalog.json"
+    if not catalog_path.exists():
+        return {}
+    try:
+        return json.loads(catalog_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+@mcp.command("catalog")
+@click.option("--category", default=None, help="Filter by category")
+def mcp_catalog(category: str | None):
+    """Browse the bundled MCP server marketplace (92+ servers)."""
+    catalog = _load_mcp_catalog()
+    if not catalog:
+        click.echo("MCP catalog not available.")
+        return
+
+    by_cat: dict[str, list[str]] = {}
+    for name, cfg in catalog.items():
+        if category and cfg.get("category") != category:
+            continue
+        by_cat.setdefault(cfg.get("category", "other"), []).append(name)
+
+    if not by_cat:
+        click.echo(f"No MCP servers found for category '{category}'.")
+        return
+
+    click.echo(f"\n  {_style('MCP Server Marketplace', 'cyan', bold=True)} ({sum(len(v) for v in by_cat.values())} servers)")
+    for cat, names in sorted(by_cat.items()):
+        click.echo(f"\n  {_style(cat, 'yellow', bold=True)}")
+        for name in sorted(names):
+            desc = catalog[name].get("description", "")
+            desc = f" — {desc[:70]}" if desc else ""
+            click.echo(f"    {_style('•', 'bright_black')} {name}{desc}")
+    click.echo(f"\n  {_style('Install with:', 'bright_black')} nexus mcp install \"<name>\"\n")
+
+
+@mcp.command("search")
+@click.argument("query")
+def mcp_search(query: str):
+    """Search the MCP marketplace catalog by name/description/category."""
+    catalog = _load_mcp_catalog()
+    q = query.lower()
+    hits = {
+        name: cfg
+        for name, cfg in catalog.items()
+        if q in name.lower() or q in cfg.get("description", "").lower() or q in cfg.get("category", "").lower()
+    }
+    if not hits:
+        click.echo(f"No MCP servers match '{query}'.")
+        return
+    click.echo(f"\n  {_style(f'{len(hits)} match(es) for', 'cyan')} '{query}'")
+    for name, cfg in sorted(hits.items()):
+        desc = cfg.get("description", "")
+        desc = f" — {desc[:70]}" if desc else ""
+        click.echo(f"    {_style('•', 'bright_black')} {_style(name, bold=True)} [{cfg.get('category')}]{desc}")
+    click.echo()
+
+
+@mcp.command("install")
+@click.argument("name")
+def mcp_install(name: str):
+    """Install an MCP server from the bundled marketplace catalog by name."""
+    import json
+
+    catalog = _load_mcp_catalog()
+    cfg = catalog.get(name)
+    if cfg is None:
+        matches = [k for k in catalog if k.lower() == name.lower()]
+        if not matches:
+            matches = [k for k in catalog if name.lower() in k.lower()]
+        if len(matches) == 1:
+            name = matches[0]
+            cfg = catalog[name]
+        elif len(matches) > 1:
+            click.echo(f"Multiple matches for '{name}': {', '.join(matches[:8])}")
+            click.echo("Be more specific, or run 'nexus mcp search <query>'.")
+            return
+        else:
+            click.echo(f"No MCP server named '{name}' in the catalog. Try 'nexus mcp search {name}'.")
+            return
+
+    config_path = Path.home() / ".nexus" / "mcp-servers.json"
+    servers = {}
+    if config_path.exists():
+        servers = json.loads(config_path.read_text())
+
+    entry = {"transport": cfg.get("transport", "stdio")}
+    if entry["transport"] == "sse":
+        entry["url"] = cfg.get("url", "")
+    else:
+        entry["command"] = cfg.get("command", "")
+        entry["args"] = cfg.get("args", [])
+
+    env_vars = cfg.get("env_vars") or []
+    if env_vars:
+        entry["env"] = {k: "" for k in env_vars}
+
+    servers[name] = entry
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(servers, indent=2))
+
+    click.echo(f"  {_style('✔', 'green')} Installed MCP server: {_style(name, bold=True)}")
+    if env_vars:
+        click.echo(f"  {_style('⚠', 'yellow')} Requires environment variables: {', '.join(env_vars)}")
+        click.echo(f"    Set them in {config_path} under \"{name}\".\"env\" before use.")
+    click.echo(f"  {_style('Verify with:', 'bright_black')} nexus mcp list")
+
+
 @mcp.command("remove")
 @click.argument("name")
 def mcp_remove(name: str):
@@ -1431,7 +1546,8 @@ def skill_search(query: str) -> None:
     for s in results[:20]:
         tags = s.get("tags", [])
         tag_str = f" \033[90m{', '.join(tags[:3])}\033[0m" if tags else ""
-        click.echo(f"  \033[1m{s.get('name')}\033[0m  \033[90mv{s.get('version', '1.0')}\033[0m")
+        badge = " \033[90m[bundled]\033[0m" if s.get("source") == "bundled" else ""
+        click.echo(f"  \033[1m{s.get('name')}\033[0m  \033[90mv{s.get('version', '1.0')}\033[0m{badge}")
         click.echo(f"      {s.get('description', 'No description')}{tag_str}")
     click.echo(f"\nInstall with: \033[36mnexus skill install <name>\033[0m")
 
@@ -2913,8 +3029,21 @@ def main():
     config = load_config()
     config.ensure_dirs()
 
+    # Commands that don't need an LLM provider to be useful (browsing the MCP
+    # catalog, managing skills/plugins, reading docs, etc.) should never be
+    # hijacked into the full interactive setup/diagnostics wizard just
+    # because no provider is configured yet. Only gate provider-dependent
+    # commands (chat/REPL, TUI, agents, run) behind the setup flow.
+    PROVIDER_INDEPENDENT_COMMANDS = {
+        "mcp", "skill", "plugin", "config", "doctor", "auth", "completion",
+        "upgrade", "safety", "sync", "learn", "phone", "voice", "exec",
+        "termux", "self-improve", "self_improve",
+    }
+    subcommand = sys.argv[1] if len(sys.argv) > 1 else None
+    needs_provider_check = subcommand not in PROVIDER_INDEPENDENT_COMMANDS
+
     # Check for providers
-    if not config.providers:
+    if not config.providers and needs_provider_check:
         from nexus.doctor import run_doctor
 
         # If we are in the main CLI (not tui/voice/repl), assume interactive unless --non-interactive

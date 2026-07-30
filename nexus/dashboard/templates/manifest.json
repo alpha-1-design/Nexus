@@ -1,16 +1,16 @@
 {
-  "name": "Nexus Dashboard",
-  "short_name": "Nexus",
-  "description": "AI Coding Agent — Web Dashboard",
+  "name": "GIA — Nexus Dashboard",
+  "short_name": "GIA",
+  "description": "GIA — your Nexus AI coding agent, in the browser",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a0a0a",
-  "theme_color": "#ff6b00",
+  "background_color": "#0e0e10",
+  "theme_color": "#6e56cf",
   "orientation": "any",
   "scope": "/",
   "icons": [
     {
-      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%230a0a0a' width='100' height='100' rx='20'/><text y='.9em' font-size='85' x='12' fill='%23ff6b00'>N</text></svg>",
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%230e0e10' width='100' height='100' rx='22'/><text y='.72em' font-size='58' x='50%' text-anchor='middle' font-family='sans-serif' font-weight='700' fill='%236e56cf'>G</text></svg>",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"

@@ -8,7 +8,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from ..agent import AgentOrchestrator, AgentRole, MultiAgentTeam
+from ..agent import AgentOrchestrator
+from ..agents import AgentRole, MultiAgentTeam
 from ..config import NexusConfig, ProviderConfig, load_config, save_config
 from ..memory import VectorMemory, get_memory
 from ..providers import get_manager
@@ -169,6 +170,96 @@ class NexusAPI:
         skills = self._get_skills()
         success = skills.activate(name)
         return {"status": "success" if success else "error", "skill": name}
+
+    # ── mcp marketplace ──────────────────────────────────────
+
+    def _load_mcp_catalog(self) -> dict[str, Any]:
+        import json
+        catalog_path = Path(__file__).parent.parent / "data" / "mcp_catalog.json"
+        if not catalog_path.exists():
+            return {}
+        try:
+            return json.loads(catalog_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _mcp_config_path(self) -> Path:
+        return Path.home() / ".nexus" / "mcp-servers.json"
+
+    def _load_installed_mcp(self) -> dict[str, Any]:
+        import json
+        path = self._mcp_config_path()
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def get_mcp_catalog(self, query: str = "", category: str = "") -> dict[str, Any]:
+        catalog = self._load_mcp_catalog()
+        installed = self._load_installed_mcp()
+        q = query.lower().strip()
+        cat = category.strip()
+        items = []
+        for name, cfg in catalog.items():
+            if cat and cfg.get("category") != cat:
+                continue
+            if q and q not in name.lower() and q not in cfg.get("description", "").lower() and q not in cfg.get("category", "").lower():
+                continue
+            items.append({
+                "name": name,
+                "description": cfg.get("description", ""),
+                "category": cfg.get("category", "other"),
+                "transport": cfg.get("transport", "stdio"),
+                "env_vars": cfg.get("env_vars", []),
+                "installed": name in installed,
+            })
+        items.sort(key=lambda i: (i["category"], i["name"]))
+        categories = sorted({cfg.get("category", "other") for cfg in catalog.values()})
+        return {"servers": items, "categories": categories, "total": len(catalog)}
+
+    def get_installed_mcp(self) -> dict[str, Any]:
+        installed = self._load_installed_mcp()
+        return {
+            "servers": [
+                {"name": name, **cfg} for name, cfg in installed.items()
+            ]
+        }
+
+    def install_mcp(self, name: str) -> dict[str, Any]:
+        import json
+        catalog = self._load_mcp_catalog()
+        cfg = catalog.get(name)
+        if cfg is None:
+            return {"status": "error", "message": f"'{name}' not found in catalog"}
+
+        servers = self._load_installed_mcp()
+        entry: dict[str, Any] = {"transport": cfg.get("transport", "stdio")}
+        if entry["transport"] == "sse":
+            entry["url"] = cfg.get("url", "")
+        else:
+            entry["command"] = cfg.get("command", "")
+            entry["args"] = cfg.get("args", [])
+        env_vars = cfg.get("env_vars") or []
+        if env_vars:
+            entry["env"] = {k: "" for k in env_vars}
+
+        servers[name] = entry
+        path = self._mcp_config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(servers, indent=2))
+        return {"status": "success", "name": name, "requires_env": env_vars}
+
+    def uninstall_mcp(self, name: str) -> dict[str, Any]:
+        import json
+        servers = self._load_installed_mcp()
+        if name not in servers:
+            return {"status": "error", "message": f"'{name}' is not installed"}
+        del servers[name]
+        path = self._mcp_config_path()
+        path.write_text(json.dumps(servers, indent=2))
+        return {"status": "success", "name": name}
 
     # ── memory ───────────────────────────────────────────────
 

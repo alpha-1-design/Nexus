@@ -66,8 +66,17 @@ nexus = "nexus.cli:main"
 Homepage = "https://github.com/alpha-1-design/Nexus"
 Repository = "https://github.com/alpha-1-design/Nexus"
 
-[tool.setuptools]
-packages = ["nexus"]
+[tool.setuptools.packages.find]
+include = ["nexus*"]
+
+[tool.setuptools.package-data]
+nexus = [
+    "tui/*.css",
+    "data/*.json",
+    "data/community_skills/**/*.md",
+    "dashboard/templates/*",
+    "dashboard/static/**/*",
+]
 
 [tool.ruff]
 line-length = 160

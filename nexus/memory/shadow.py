@@ -19,19 +19,58 @@ class ShadowIndexer:
         self.indexer = ProjectIndexer(self.memory)
         self.running = False
         self._task: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._scan_interval = 300  # Scan every 5 minutes
         self._files_per_chunk = 5  # Process 5 files at a time to stay lightweight
 
     def start(self):
-        """Start the shadow indexing process."""
-        if not self.running:
-            self.running = True
-            self._task = asyncio.create_task(self._run_loop())
+        """Start the shadow indexing process.
+
+        Nexus's only current call site (`nexus/tui/app.py`) launches this
+        via `threading.Thread(target=self.shadow_indexer.start)` -- a plain
+        OS thread with no asyncio event loop of its own. Calling
+        `asyncio.create_task()` in that situation raises `RuntimeError`
+        immediately (no running loop), which was previously happening
+        silently in the background thread and meant the entire proactive
+        background-learning feature never actually ran. Handle both cases:
+        schedule onto an already-running loop if one exists (e.g. when
+        called from async code directly), otherwise own and drive a loop
+        for the lifetime of the background thread.
+        """
+        if self.running:
+            return
+        self.running = True
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None:
+            self._task = loop.create_task(self._run_loop())
+        else:
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            self._task = self._loop.create_task(self._run_loop())
+            try:
+                self._loop.run_forever()
+            finally:
+                self._loop.close()
 
     def stop(self):
-        """Stop the shadow indexing process."""
+        """Stop the shadow indexing process.
+
+        Safe to call from a different thread than the one running the
+        indexing loop (the common case, since `start()` is usually the
+        target of a background `threading.Thread`).
+        """
         self.running = False
-        if self._task:
+        if self._task is None:
+            return
+        if self._loop is not None and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._task.cancel)
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        else:
             self._task.cancel()
 
     async def _run_loop(self):

@@ -46,40 +46,57 @@ class SkillLoader:
     """
 
     FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n(.*)", re.DOTALL)
+    # Searched in this order. Later directories override earlier ones on
+    # name collision, so user-authored skills always win over the bundled
+    # community library, which in turn wins over other bundled defaults.
     SKILL_DIRS = [
+        Path(__file__).parent.parent.parent / "skills",
+        Path(__file__).parent.parent / "data" / "community_skills",
         Path.home() / ".config" / "opencode" / "skills",
         Path.home() / ".nexus" / "skills",
-        Path(__file__).parent.parent.parent / "skills",
     ]
 
     def __init__(self, skills_dir: Path | None = None):
+        # Backwards compatible: an explicit single directory still works
+        # exactly as before. Otherwise we search *all* known locations.
+        self._explicit_dir = skills_dir
         self.skills_dir = skills_dir or self._find_default_dir()
         self._cache: dict[str, Skill] = {}
         self._loaded = False
 
     def _find_default_dir(self) -> Path | None:
-        """Find the first existing skills directory."""
+        """Find the first existing skills directory (legacy accessor)."""
         for d in self.SKILL_DIRS:
             if d.exists() and d.is_dir():
                 return d
         return None
 
+    def _search_dirs(self) -> list[Path]:
+        if self._explicit_dir:
+            return [self._explicit_dir]
+        return [d for d in self.SKILL_DIRS if d.exists() and d.is_dir()]
+
     def discover(self) -> list[Skill]:
-        """Discover all skills in the skills directory."""
-        skills = []
-        if not self.skills_dir or not self.skills_dir.exists():
-            return skills
+        """Discover all skills across every known skills directory.
 
-        for path in self.skills_dir.rglob("*.md"):
-            try:
-                skill = self._parse_skill_file(path)
+        Directories are merged rather than short-circuited on the first
+        match, so the bundled community library and a user's personal
+        `~/.nexus/skills` directory are both available at once. When two
+        directories define a skill with the same name, the one from a
+        later directory in `SKILL_DIRS` wins.
+        """
+        by_name: dict[str, Skill] = {}
+        for skills_dir in self._search_dirs():
+            for path in skills_dir.rglob("*.md"):
+                try:
+                    skill = self._parse_skill_file(path)
+                except Exception:
+                    continue
                 if skill:
-                    skills.append(skill)
-            except Exception:
-                continue
+                    by_name[skill.name] = skill
 
-        skills.sort(key=lambda s: (-s.priority, s.name))
-        self._cache = {s.name: s for s in skills}
+        skills = sorted(by_name.values(), key=lambda s: (-s.priority, s.name))
+        self._cache = by_name
         self._loaded = True
         return skills
 
@@ -260,28 +277,66 @@ class SkillsManager:
             return []
 
     def search_community(self, query: str) -> list[dict[str, str]]:
-        """Search community skills by name/description/tags."""
+        """Search community skills by name/description/tags.
+
+        Tries the remote registry first, then falls back to (and merges
+        with) the locally bundled skill library — which ships with several
+        hundred skills out of the box — so search stays useful offline or
+        when the remote registry has nothing indexed yet.
+        """
         q = query.lower()
         all_skills = self.list_community()
-        return [
+        remote_hits = [
             s for s in all_skills
             if q in s.get("name", "").lower()
             or q in s.get("description", "").lower()
             or q in " ".join(s.get("tags", [])).lower()
         ]
 
+        if not self._loaded:
+            self.load_all()
+        local_hits = [
+            {
+                "name": s.name,
+                "description": s.description,
+                "category": s.category,
+                "tags": s.tags,
+                "version": s.version,
+                "source": "bundled",
+            }
+            for s in self.search(query)
+        ]
+
+        seen = {h["name"] for h in remote_hits}
+        merged = remote_hits + [h for h in local_hits if h["name"] not in seen]
+        return merged
+
     def install_community(self, skill_name: str) -> dict[str, str]:
         """Install a community skill by name.
 
         Downloads the .md file from the community registry and places it
-        in the user's skills directory so it's auto-discovered.
+        in the user's skills directory so it's auto-discovered. If the
+        remote registry doesn't have it (or is unreachable) but the skill
+        is already available in the bundled local library, activate that
+        instead of failing outright.
         """
         import urllib.request
 
         all_skills = self.list_community()
         match = next((s for s in all_skills if s.get("name") == skill_name), None)
+
         if not match:
-            return {"status": "error", "message": f"Skill '{skill_name}' not found in community registry"}
+            if not self._loaded:
+                self.load_all()
+            local = self.loader.get(skill_name)
+            if local:
+                self.activate(skill_name)
+                return {
+                    "status": "success",
+                    "message": f"'{skill_name}' is already available in the bundled skill library ({local.version})",
+                    "path": local.source_file,
+                }
+            return {"status": "error", "message": f"Skill '{skill_name}' not found in community registry or bundled library"}
 
         # Determine install dir
         install_dir = Path.home() / ".nexus" / "skills"

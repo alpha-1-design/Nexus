@@ -79,6 +79,9 @@ class AgentConfig:
     system_prompt: str | None = None
     max_context_tokens: int = 128000
     context_prune_ratio: float = 0.8
+    memory_recall_enabled: bool = True
+    memory_recall_limit: int = 3
+    memory_auto_persist: bool = True
 
 
 @dataclass
@@ -133,6 +136,21 @@ class AgentOrchestrator:
         self._turn_count = 0
         self._tool_stats: dict[str, dict] = {}
         self._team: MultiAgentTeam | None = None
+
+        # ── memory layer ──────────────────────────────────────
+        # `self.memory` (structured facts/sessions) was previously stored
+        # but never actually consulted anywhere in the turn loop -- facts
+        # were never recalled, no semantic memory was queried, and
+        # conversations were never persisted to a session automatically.
+        # This wires those pieces (Memory facts, VectorMemory semantic
+        # recall, Session auto-persistence) into the actual request loop.
+        self._vector_memory = None
+        self._session = None
+        if self.memory is not None:
+            try:
+                self._session = self.memory.create_session()
+            except Exception:
+                self._session = None
 
     async def _execute_tool_callback(self, name: str, args: dict[str, Any]) -> ToolResult:
         """Bridge for ExecutionEngine to call tools."""
@@ -214,6 +232,14 @@ class AgentOrchestrator:
 
         self._messages.append(Message(role="user", content=user_input))
 
+        memory_note = await self._build_memory_context(user_input)
+        if memory_note:
+            # Inserted as a system-role note right before this turn's user
+            # message. It stays in history like any other message and is
+            # subject to the same context pruning as everything else, so it
+            # doesn't need special-case cleanup.
+            self._messages.insert(len(self._messages) - 1, Message(role="system", content=memory_note))
+
         self._thinking.update_step(analyze_step, confidence=0.85)
         self._thinking.finish_step(analyze_step, result="Analyzed user input")
 
@@ -245,7 +271,83 @@ class AgentOrchestrator:
 
         turn.duration_ms = int((time.monotonic() - start) * 1000)
         self._history.append(turn)
+        await self._persist_turn(turn)
         return turn
+
+    def _get_vector_memory(self):
+        """Lazily create the semantic memory store, scoped under the same
+        memory directory as structured facts/sessions."""
+        if self._vector_memory is None and self.memory is not None:
+            try:
+                from ..memory.vectors import VectorMemory
+
+                db_path = str(self.memory.memory_dir / "vector_memory.db")
+                self._vector_memory = VectorMemory(db_path=db_path)
+            except Exception:
+                self._vector_memory = False  # sentinel: creation failed, don't retry every turn
+        return self._vector_memory or None
+
+    async def _build_memory_context(self, user_input: str) -> str | None:
+        """Assemble a compact memory-recall note for this turn: relevant
+        stored facts plus the top semantically-related past exchanges.
+        Returns None if there's nothing useful to add (no memory configured,
+        recall disabled, or nothing relevant found) so we don't pollute the
+        context with an empty note.
+        """
+        if self.memory is None or not self.config.memory_recall_enabled:
+            return None
+
+        parts: list[str] = []
+
+        try:
+            facts = self.memory.get_all_facts()
+            if facts:
+                fact_lines = [f"- {k}: {v}" for k, v in list(facts.items())[:10]]
+                parts.append("Known facts about the user/project:\n" + "\n".join(fact_lines))
+        except Exception:
+            pass
+
+        vm = self._get_vector_memory()
+        if vm is not None:
+            try:
+                entries = await vm.recall(user_input, limit=self.config.memory_recall_limit)
+                if entries:
+                    mem_lines = [f"- {e.content[:200]}" for e in entries]
+                    parts.append("Relevant past context:\n" + "\n".join(mem_lines))
+            except Exception:
+                pass
+
+        if not parts:
+            return None
+        return "[Memory recall -- for context only, not user-visible]\n" + "\n\n".join(parts)
+
+    async def _persist_turn(self, turn: Turn) -> None:
+        """Auto-persist the turn to the current session and index it in
+        semantic memory, so future turns (and future sessions) can recall
+        it. Best-effort: memory persistence should never break a
+        conversation turn that otherwise succeeded.
+        """
+        if self.memory is None or not self.config.memory_auto_persist:
+            return
+
+        try:
+            if self._session is not None:
+                self._session.messages.append({"role": "user", "content": turn.user_message})
+                self._session.messages.append({"role": "assistant", "content": turn.assistant_message})
+                self._session.tools_used = list({tc.get("name", "") for tc in turn.tool_calls} | set(self._session.tools_used))
+                self.memory.save_session(self._session)
+        except Exception:
+            pass
+
+        vm = self._get_vector_memory()
+        if vm is not None and turn.assistant_message and not turn.error:
+            try:
+                await vm.store(
+                    f"User: {turn.user_message}\nAssistant: {turn.assistant_message[:500]}",
+                    metadata={"session_id": self._session.id if self._session else None},
+                )
+            except Exception:
+                pass
 
     async def _run_loop(self, stream_callback=None) -> dict[str, Any]:
         """The main agent loop."""

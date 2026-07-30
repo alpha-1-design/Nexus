@@ -1,404 +1,519 @@
-const state = { provider: null, tools: [], skills: [], sessions: [], facts: [], agents: [] };
+/* GIA — Nexus Dashboard front-end.
+ * No build step, no framework: plain fetch + DOM, matching the rest of
+ * Nexus's lightweight-dependency philosophy.
+ */
+(() => {
+  "use strict";
 
-/* ── navigation ── */
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const escapeHtml = (s) =>
+    s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-document.querySelectorAll('.sidebar nav a').forEach(a => {
-  a.addEventListener('click', e => {
-    e.preventDefault();
-    document.querySelectorAll('.sidebar nav a').forEach(x => x.classList.remove('active'));
-    a.classList.add('active');
-    const section = a.dataset.section;
-    document.querySelectorAll('.content > section').forEach(s => s.style.display = 'none');
-    const el = document.getElementById('section-' + section);
-    if (el) el.style.display = 'block';
-    document.getElementById('section-title').textContent = section.charAt(0).toUpperCase() + section.slice(1);
-    if (section === 'projects') loadProjects();
-    if (section === 'agents') loadAgents();
-    if (section === 'settings') loadSettings();
-  });
-});
-
-/* ── API helper ── */
-
-async function api(path, opts = {}) {
-  try {
-    const res = await fetch(path, opts);
-    return await res.json();
-  } catch { return null; }
-}
-
-/* ── overview ── */
-
-async function loadOverview() {
-  const [status, tools, skills, facts, sessions, automation] = await Promise.all([
-    api('/api/status'), api('/api/tools'), api('/api/skills'),
-    api('/api/facts'), api('/api/sessions'), api('/api/automation/status'),
-  ]);
-  if (status) {
-    state.provider = status.providers?.active || null;
-    const ok = status.providers?.configured?.length > 0;
-    document.getElementById('stat-status').innerHTML = ok
-      ? '<span style="color:var(--green)">● Online</span>'
-      : '<span style="color:var(--yellow)">● Limited</span>';
-    document.getElementById('nav-status-dot').className = 'status-dot ' + (ok ? 'online' : 'offline');
-    document.getElementById('stat-provider').textContent = status.providers?.active || 'None';
-    document.getElementById('stat-provider-model').textContent = status.system?.python_version || '';
-    document.getElementById('header-provider').textContent = status.providers?.active
-      ? 'Provider: ' + status.providers.active : 'No provider configured';
+  /** Very small markdown-ish renderer: fenced code blocks + inline code. */
+  function renderContent(text) {
+    const parts = text.split(/```(\w*)\n?([\s\S]*?)```/g);
+    let html = "";
+    for (let i = 0; i < parts.length; i += 3) {
+      const plain = parts[i] || "";
+      html += escapeHtml(plain).replace(/`([^`]+)`/g, "<code>$1</code>");
+      if (i + 2 < parts.length) {
+        const lang = parts[i + 1];
+        const code = parts[i + 2];
+        html += `<pre><code class="lang-${escapeHtml(lang)}">${escapeHtml(code)}</code></pre>`;
+      }
+    }
+    return html;
   }
-  if (tools && tools.tools) {
-    state.tools = tools.tools;
-    document.getElementById('stat-tools').textContent = tools.tools.length;
-    document.getElementById('nav-tools-count').textContent = tools.tools.length;
-    renderTools(tools.tools);
-  }
-  if (skills && skills.skills) {
-    state.skills = skills.skills;
-    const active = skills.skills.filter(s => s.active).length;
-    document.getElementById('stat-skills').textContent = active + '/' + skills.skills.length;
-    document.getElementById('nav-skills-count').textContent = skills.skills.length;
-    renderSkills(skills.skills);
-  }
-  if (facts && facts.facts) {
-    state.facts = facts.facts;
-    document.getElementById('stat-facts').textContent = facts.facts.length;
-    renderFacts(facts.facts);
-  }
-  if (sessions && sessions.sessions) {
-    state.sessions = sessions.sessions;
-    document.getElementById('stat-sessions').textContent = sessions.sessions.length;
-    document.getElementById('nav-sessions-count').textContent = sessions.sessions.length;
-    renderSessions(sessions.sessions);
-  }
-  if (automation) renderAutomation(automation);
-}
 
-/* ── providers ── */
-
-async function loadProviders() {
-  const data = await api('/api/providers');
-  renderProviders(data);
-  if (data && data.providers) {
-    document.getElementById('nav-providers-count').textContent = data.providers.length;
-  }
-}
-
-function renderProviders(data) {
-  const el = document.getElementById('providers-list');
-  if (!data || !data.providers || !data.providers.length) {
-    el.innerHTML = '<div class="empty-state">No providers configured</div>';
-    return;
-  }
-  el.innerHTML = data.providers.map(p => `
-    <div class="provider-card">
-      <div>
-        <div class="name">${p.name}</div>
-        <div class="model">${p.model || 'default'} &middot; ${p.type}</div>
-      </div>
-      <div class="flex items-center gap-2">
-        <span class="tag ${p.active ? 'active' : ''}">${p.active ? 'Active' : 'Inactive'}</span>
-        <div class="actions">
-          ${!p.active ? `<button onclick="activateProvider('${p.name}')">Activate</button>` : ''}
-          <button class="danger" onclick="removeProvider('${p.name}')">Remove</button>
-        </div>
-      </div>
-    </div>
-  `).join('');
-}
-
-async function activateProvider(name) {
-  await api('/api/providers/' + encodeURIComponent(name) + '/activate', { method: 'POST' });
-  loadProviders();
-}
-
-async function removeProvider(name) {
-  await api('/api/providers', { method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name}) });
-  loadProviders();
-}
-
-function showAddProvider() {
-  document.getElementById('provider-form').style.display = 'block';
-}
-
-function hideAddProvider() {
-  document.getElementById('provider-form').style.display = 'none';
-}
-
-async function addProvider() {
-  const data = {
-    name: document.getElementById('prov-name').value,
-    provider_type: document.getElementById('prov-type').value,
-    api_key: document.getElementById('prov-key').value,
-    model: document.getElementById('prov-model').value,
-    base_url: document.getElementById('prov-url').value,
+  // ── state ──────────────────────────────────────────────────
+  const state = {
+    sessions: [],
+    currentMessages: [],
+    streaming: false,
   };
-  await api('/api/providers', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
-  hideAddProvider();
-  loadProviders();
-}
 
-/* ── tools ── */
+  // ═══════════ SIDEBAR / VIEW SWITCHING ═══════════
 
-function renderTools(tools) {
-  const el = document.getElementById('tools-list');
-  if (!tools || !tools.length) { el.innerHTML = '<div class="empty-state">No tools registered</div>'; return; }
-  el.innerHTML = tools.map(t => `
-    <span class="tool-item"><span class="dot"></span> ${t.name} <span style="color:var(--text-dim);font-size:9px">${t.category || ''}</span></span>
-  `).join('');
-}
+  function initSidebar() {
+    const collapseBtn = $("#sidebar-collapse-btn");
+    const sidebar = $("#sidebar");
+    collapseBtn.addEventListener("click", () => sidebar.classList.toggle("collapsed"));
 
-/* ── skills ── */
+    $("#mobile-menu-btn").addEventListener("click", () => sidebar.classList.toggle("mobile-open"));
 
-function renderSkills(skills) {
-  const el = document.getElementById('skills-list');
-  if (!skills || !skills.length) { el.innerHTML = '<div class="empty-state">No skills loaded</div>'; return; }
-  el.innerHTML = skills.map(s => `
-    <span class="skill-badge ${s.active ? 'active' : ''}" onclick="toggleSkill('${s.name}')">
-      ${s.active ? '●' : '○'} ${s.name}
-    </span>
-  `).join('');
-}
+    $$(".view-nav-item").forEach((btn) => {
+      btn.addEventListener("click", () => switchView(btn.dataset.view));
+    });
 
-async function toggleSkill(name) {
-  await api('/api/skills/' + encodeURIComponent(name) + '/activate', { method: 'POST' });
-  const data = await api('/api/skills');
-  if (data && data.skills) renderSkills(data.skills);
-}
+    $("#new-chat-btn").addEventListener("click", () => startNewChat());
+  }
 
-/* ── agents ── */
+  function switchView(view) {
+    $$(".view-nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+    $$(".view").forEach((v) => v.classList.remove("active"));
+    const target = document.getElementById(`view-${view}`);
+    if (target) target.classList.add("active");
+    document.getElementById("sidebar").classList.remove("mobile-open");
 
-async function loadAgents() {
-  const data = await api('/api/agent/list');
-  if (data && data.agents) {
-    state.agents = data.agents;
-    document.getElementById('nav-agents-count').textContent = data.agents.length;
-    const el = document.getElementById('agents-list');
-    if (!data.agents.length) {
-      el.innerHTML = '<div class="empty-state">No active agents. Spawn one above.</div>';
+    if (view === "agents") loadAgents();
+    if (view === "skills") loadSkills();
+    if (view === "mcp") loadMcpCatalog();
+    if (view === "providers") loadProviders();
+  }
+
+  // ═══════════ CHAT ═══════════
+
+  function startNewChat() {
+    state.currentMessages = [];
+    $("#messages").innerHTML = "";
+    $("#chat-empty").style.display = "flex";
+    $$(".session-item").forEach((el) => el.classList.remove("active"));
+    switchView("chat");
+  }
+
+  function appendMessage(role, content, { streaming = false } = {}) {
+    $("#chat-empty").style.display = "none";
+    const wrap = document.createElement("div");
+    wrap.className = `msg ${role}${streaming ? " streaming" : ""}`;
+    const avatarLabel = role === "user" ? "You" : "G";
+    wrap.innerHTML = `
+      <div class="msg-avatar">${avatarLabel}</div>
+      <div class="msg-body">
+        <div class="msg-role">${role === "user" ? "You" : "GIA"}</div>
+        <div class="msg-content"></div>
+      </div>`;
+    wrap.querySelector(".msg-content").innerHTML = renderContent(content);
+    $("#messages").appendChild(wrap);
+    scrollChatToBottom();
+    return wrap;
+  }
+
+  function scrollChatToBottom() {
+    const el = $("#chat-scroll");
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function autoGrowTextarea(el) {
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+  }
+
+  async function sendMessage(text) {
+    if (!text.trim() || state.streaming) return;
+    appendMessage("user", text);
+    state.currentMessages.push({ role: "user", content: text });
+
+    const input = $("#composer-input");
+    input.value = "";
+    autoGrowTextarea(input);
+    setSendEnabled();
+
+    const assistantEl = appendMessage("assistant", "", { streaming: true });
+    const contentEl = assistantEl.querySelector(".msg-content");
+    state.streaming = true;
+    setStatus("busy");
+
+    try {
+      const res = await fetch("/api/chat/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      });
+
+      if (!res.ok || !res.body) {
+        throw new Error(`Server error (${res.status})`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let full = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let idx;
+        while ((idx = buffer.indexOf("\n\n")) !== -1) {
+          const rawEvent = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          const line = rawEvent.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          let evt;
+          try {
+            evt = JSON.parse(payload);
+          } catch {
+            continue;
+          }
+          if (evt.type === "delta") {
+            full += evt.content;
+            contentEl.innerHTML = renderContent(full);
+            scrollChatToBottom();
+          } else if (evt.type === "error") {
+            full += `\n\n⚠ ${evt.error}`;
+            contentEl.innerHTML = renderContent(full);
+          } else if (evt.type === "done") {
+            if (!full && evt.result && evt.result.message) {
+              full = evt.result.message;
+              contentEl.innerHTML = renderContent(full);
+            }
+            if (evt.result && evt.result.duration_ms != null) {
+              const meta = document.createElement("div");
+              meta.className = "msg-meta";
+              meta.textContent = `${evt.result.duration_ms}ms · ${evt.result.tool_calls || 0} tool call(s)`;
+              assistantEl.querySelector(".msg-body").appendChild(meta);
+            }
+          }
+        }
+      }
+
+      state.currentMessages.push({ role: "assistant", content: full });
+    } catch (err) {
+      contentEl.innerHTML = renderContent(`⚠ ${err.message || "Something went wrong reaching Nexus."}`);
+    } finally {
+      assistantEl.classList.remove("streaming");
+      state.streaming = false;
+      setStatus("online");
+      setSendEnabled();
+    }
+  }
+
+  function setSendEnabled() {
+    const input = $("#composer-input");
+    $("#composer-send").disabled = state.streaming || !input.value.trim();
+  }
+
+  function initComposer() {
+    const input = $("#composer-input");
+    input.addEventListener("input", () => {
+      autoGrowTextarea(input);
+      setSendEnabled();
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage(input.value);
+      }
+    });
+    $("#composer-send").addEventListener("click", () => sendMessage(input.value));
+
+    $$(".suggestion-card").forEach((card) => {
+      card.addEventListener("click", () => sendMessage(card.dataset.prompt));
+    });
+
+    setSendEnabled();
+  }
+
+  // ═══════════ STATUS / VITALS ═══════════
+
+  function setStatus(state_) {
+    const el = $("#connection-status");
+    el.className = `status-pill ${state_}`;
+    const labels = { online: "online", offline: "offline", busy: "thinking…", connecting: "connecting…" };
+    el.querySelector ? null : null;
+    el.innerHTML = `<span class="dot"></span>${labels[state_] || state_}`;
+  }
+
+  async function refreshStatus() {
+    try {
+      const res = await fetch("/api/status");
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setStatus("online");
+      const activeProvider = data.providers && data.providers.active;
+      $("#active-provider-label").textContent = activeProvider ? activeProvider : "No provider configured";
+    } catch {
+      setStatus("offline");
+    }
+  }
+
+  async function refreshVitals() {
+    try {
+      const res = await fetch("/api/vitals");
+      const data = await res.json();
+      $("#vital-cpu").textContent = `CPU ${data.cpu ?? "—"}`;
+      $("#vital-disk").textContent = `Disk ${data.disk ?? "—"}`;
+    } catch {
+      /* non-fatal */
+    }
+  }
+
+  async function refreshSessions() {
+    try {
+      const res = await fetch("/api/sessions");
+      const data = await res.json();
+      const sessions = data.sessions || [];
+      const list = $("#session-list");
+      if (!sessions.length) {
+        list.innerHTML = `<div class="session-empty">No conversations yet</div>`;
+        return;
+      }
+      list.innerHTML = "";
+      sessions.forEach((s) => {
+        const item = document.createElement("div");
+        item.className = "session-item";
+        const firstUserMsg = (s.messages || []).find((m) => m.role === "user");
+        const title = s.title || s.summary || (firstUserMsg && firstUserMsg.content) || s.id || "Untitled chat";
+        item.textContent = title.length > 48 ? title.slice(0, 48) + "…" : title;
+        list.appendChild(item);
+      });
+    } catch {
+      /* non-fatal: sessions API may not be wired to a persistence backend yet */
+    }
+  }
+
+  // ═══════════ AGENTS ═══════════
+
+  async function loadAgents() {
+    const grid = $("#agents-grid");
+    grid.innerHTML = `<div class="muted">Loading agents…</div>`;
+    try {
+      const res = await fetch("/api/agent/list");
+      const data = await res.json();
+      const agents = data.agents || [];
+      $("#nav-agents-count").textContent = agents.length;
+      if (!agents.length) {
+        grid.innerHTML = `<div class="muted">No active agents. Spawn one above.</div>`;
+        return;
+      }
+      grid.innerHTML = "";
+      agents.forEach((a) => {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+          <div class="card-head">
+            <span class="card-title">${escapeHtml(a.name || a.id || "agent")}</span>
+            <span class="card-badge ${a.status === "running" ? "on" : ""}">${escapeHtml(a.status || "idle")}</span>
+          </div>
+          <div class="card-desc">${escapeHtml(a.role || "")}</div>
+          <div class="card-foot"><span class="card-tag">${escapeHtml(a.id || "")}</span></div>`;
+        grid.appendChild(card);
+      });
+    } catch {
+      grid.innerHTML = `<div class="muted">Could not reach the agent API.</div>`;
+    }
+  }
+
+  function initAgentSpawn() {
+    $("#agent-spawn-btn").addEventListener("click", async () => {
+      const task = $("#agent-task-input").value.trim();
+      const role = $("#agent-role-select").value;
+      if (!task) return;
+      const btn = $("#agent-spawn-btn");
+      btn.disabled = true;
+      try {
+        await fetch("/api/agent/spawn", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ task, role }),
+        });
+        $("#agent-task-input").value = "";
+        await loadAgents();
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
+  // ═══════════ SKILLS ═══════════
+
+  let allSkills = [];
+
+  async function loadSkills() {
+    const grid = $("#skills-grid");
+    grid.innerHTML = `<div class="muted">Loading skills…</div>`;
+    try {
+      const res = await fetch("/api/skills");
+      const data = await res.json();
+      allSkills = data.skills || [];
+      $("#nav-skills-count").textContent = allSkills.length;
+      renderSkills(allSkills);
+    } catch {
+      grid.innerHTML = `<div class="muted">Could not reach the skills API.</div>`;
+    }
+  }
+
+  function renderSkills(skills) {
+    const grid = $("#skills-grid");
+    if (!skills.length) {
+      grid.innerHTML = `<div class="muted">No skills match your search.</div>`;
       return;
     }
-    el.innerHTML = data.agents.map(a => `
-      <div class="agent-card">
-        <div class="info">
-          <div class="name">${a.name}</div>
-          <div class="meta"><span>${a.role}</span><span>ID: ${a.id.slice(0,12)}...</span></div>
+    grid.innerHTML = "";
+    skills.slice(0, 200).forEach((s) => {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.innerHTML = `
+        <div class="card-head">
+          <span class="card-title">${escapeHtml(s.name)}</span>
+          <span class="card-badge ${s.active ? "on" : ""}">${s.active ? "active" : s.category}</span>
         </div>
-        <div class="flex items-center gap-2">
-          <span class="status-badge ${a.status === 'error' ? 'error' : a.status === 'idle' ? 'idle' : ''}">${a.status}</span>
-          <button class="btn btn-sm btn-danger" onclick="killAgent('${a.id}')">Kill</button>
-        </div>
-      </div>
-    `).join('');
-  }
-}
-
-async function spawnAgent() {
-  const task = document.getElementById('spawn-task').value;
-  const role = document.getElementById('spawn-role').value;
-  if (!task) return;
-  await api('/api/agent/spawn', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({task, role}) });
-  document.getElementById('spawn-task').value = '';
-  loadAgents();
-}
-
-async function killAgent(id) {
-  await api('/api/agent/kill', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) });
-  loadAgents();
-}
-
-/* ── sessions ── */
-
-function renderSessions(sessions) {
-  const el = document.getElementById('sessions-list');
-  if (!sessions || !sessions.length) { el.innerHTML = '<div class="empty-state">No sessions yet</div>'; return; }
-  el.innerHTML = sessions.map(s => `
-    <div class="session-item">
-      <span class="id">${s.id ? s.id.slice(0,16) + '...' : '—'}</span>
-      <span class="turns">${s.turn_count || 0} turns</span>
-    </div>
-  `).join('');
-}
-
-/* ── facts ── */
-
-function renderFacts(facts) {
-  const el = document.getElementById('facts-list');
-  if (!facts || !facts.length) { el.innerHTML = '<div class="empty-state">No facts stored</div>'; return; }
-  el.innerHTML = facts.map(f => `<div class="fact-item">${f.key || f.content || '—'}</div>`).join('');
-}
-
-/* ── automation ── */
-
-function renderAutomation(data) {
-  const el = document.getElementById('automation-status');
-  const tools = data.automation_tools || [];
-  el.innerHTML = `
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-      <span class="tool-item" style="background:${data.playwright_available ? 'rgba(0,230,118,.08)' : 'var(--bg)'};border-color:${data.playwright_available ? 'var(--green)' : 'var(--border)'}">● Playwright</span>
-      <span class="tool-item" style="background:${data.browser_session_active ? 'rgba(0,230,118,.08)' : 'var(--bg)'};border-color:${data.browser_session_active ? 'var(--green)' : 'var(--border)'}">● Browser Session</span>
-      <span class="tool-item" style="background:${data.httpx_available ? 'rgba(0,230,118,.08)' : 'var(--bg)'};border-color:${data.httpx_available ? 'var(--green)' : 'var(--border)'}">● HTTP Client</span>
-    </div>
-    <div style="font-size:11px;color:var(--text-dim)">${tools.length} automation tools configured</div>
-  `;
-}
-
-/* ── projects ── */
-
-async function loadProjects() {
-  const root = document.getElementById('project-root').value || '.';
-  const data = await api('/api/projects/tree?path=' + encodeURIComponent(root) + '&depth=4');
-  const el = document.getElementById('project-tree');
-  if (data.error) { el.innerHTML = '<div class="empty-state">' + data.error + '</div>'; return; }
-  el.innerHTML = renderTree(data.tree || []);
-}
-
-function renderTree(nodes) {
-  if (!nodes || !nodes.length) return '<div class="empty-state">Empty directory</div>';
-  return '<div>' + nodes.map(n => {
-    if (n.type === 'dir') {
-      return `<div class="tree-node">
-        <div class="tree-toggle" onclick="toggleDir(this)">
-          <span class="icon folder">▶</span> ${n.name}/
-        </div>
-        <div class="tree-children" style="display:none">${renderTree(n.children)}</div>
-      </div>`;
-    }
-    return `<div class="tree-file" onclick="openFile('${n.path}')">
-      <span class="icon">●</span> ${n.name}
-    </div>`;
-  }).join('') + '</div>';
-}
-
-function toggleDir(el) {
-  const children = el.nextElementSibling;
-  const icon = el.querySelector('.icon');
-  if (children.style.display === 'none') {
-    children.style.display = 'block';
-    icon.textContent = '▼';
-  } else {
-    children.style.display = 'none';
-    icon.textContent = '▶';
-  }
-}
-
-async function openFile(path) {
-  const data = await api('/api/projects/read?path=' + encodeURIComponent(path));
-  const el = document.getElementById('project-editor');
-  if (data.error) { el.innerHTML = '<div class="empty-state">' + data.error + '</div>'; return; }
-  el.innerHTML = `
-    <div class="flex items-center justify-between mb-2">
-      <span class="text-sm text-dim truncate" style="flex:1">${data.path}</span>
-      <button class="btn btn-sm btn-primary" onclick="saveFile('${data.path}')">Save</button>
-    </div>
-    <textarea class="file-editor" id="file-editor-content">${escapeHtml(data.content)}</textarea>
-  `;
-}
-
-async function saveFile(path) {
-  const content = document.getElementById('file-editor-content').value;
-  const data = await api('/api/projects/write', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({path, content}),
-  });
-  const status = document.getElementById('project-editor').querySelector('.btn-primary');
-  const orig = status.textContent;
-  status.textContent = data.status === 'saved' ? '✔ Saved' : '✘ Error';
-  setTimeout(() => status.textContent = orig, 2000);
-}
-
-/* ── settings ── */
-
-async function loadSettings() {
-  const data = await api('/api/settings');
-  if (!data) return;
-  if (data.user_name) document.getElementById('set-user').value = data.user_name;
-  if (data.tool_profile) document.getElementById('set-profile').value = data.tool_profile;
-  if (data.search_provider) document.getElementById('set-search').value = data.search_provider;
-  if (data.log_level) document.getElementById('set-loglevel').value = data.log_level;
-  document.getElementById('set-sandbox').checked = !!data.sandbox_mode;
-  document.getElementById('set-termux').checked = !!data.termux_mode;
-}
-
-async function saveSettings() {
-  const data = {
-    user_name: document.getElementById('set-user').value,
-    tool_profile: document.getElementById('set-profile').value,
-    search_provider: document.getElementById('set-search').value,
-    log_level: document.getElementById('set-loglevel').value,
-    sandbox_mode: document.getElementById('set-sandbox').checked,
-    termux_mode: document.getElementById('set-termux').checked,
-  };
-  const res = await api('/api/settings', {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data),
-  });
-  const status = document.getElementById('settings-status');
-  status.textContent = res.status === 'saved' ? '✔ Saved' : '✘ Error';
-  setTimeout(() => status.textContent = '', 3000);
-}
-
-/* ── console / terminal ── */
-
-const consoleBody = document.getElementById('console-body');
-const cmdInput = document.getElementById('cmd-input');
-let logLines = [];
-
-function log(msg) {
-  logLines.push(msg);
-  if (logLines.length > 100) logLines.shift();
-  consoleBody.innerHTML = logLines.map(l => '<div>' + l.replace(/</g, '&lt;') + '</div>').join('');
-  consoleBody.scrollTop = consoleBody.scrollHeight;
-}
-
-cmdInput.addEventListener('keydown', async e => {
-  if (e.key === 'Enter') {
-    const val = cmdInput.value.trim();
-    if (!val) return;
-    log('❯ ' + val);
-    cmdInput.value = '';
-    const result = await api('/api/execute', {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({task: val}),
+        <div class="card-desc">${escapeHtml((s.description || "").slice(0, 140))}</div>
+        <div class="card-foot"><span class="card-tag">${escapeHtml(s.category || "")}</span></div>`;
+      grid.appendChild(card);
     });
-    log(result?.message || 'Done.');
   }
-});
 
-/* ── SSE real-time events ── */
+  function initSkillsSearch() {
+    $("#skills-search").addEventListener("input", (e) => {
+      const q = e.target.value.toLowerCase();
+      renderSkills(
+        allSkills.filter(
+          (s) =>
+            s.name.toLowerCase().includes(q) ||
+            (s.description || "").toLowerCase().includes(q) ||
+            (s.category || "").toLowerCase().includes(q)
+        )
+      );
+    });
+  }
 
-function connectSSE() {
-  const evtSource = new EventSource('/api/events');
-  evtSource.onmessage = e => {
+  // ═══════════ MCP MARKETPLACE ═══════════
+
+  async function loadMcpCatalog() {
+    const grid = $("#mcp-grid");
+    grid.innerHTML = `<div class="muted">Loading MCP marketplace…</div>`;
     try {
-      const data = JSON.parse(e.data);
-      if (data.vitals) {
-        if (data.vitals.cpu) document.getElementById('stat-status').innerHTML = '<span style="color:var(--green)">● Online</span>';
+      const res = await fetch("/api/mcp/catalog");
+      const data = await res.json();
+      $("#nav-mcp-count").textContent = data.total ?? (data.servers || []).length;
+
+      const catSelect = $("#mcp-category-select");
+      if (catSelect.options.length <= 1) {
+        (data.categories || []).forEach((c) => {
+          const opt = document.createElement("option");
+          opt.value = c;
+          opt.textContent = c;
+          catSelect.appendChild(opt);
+        });
       }
-    } catch {}
-  };
-}
+      renderMcp(data.servers || []);
+    } catch {
+      grid.innerHTML = `<div class="muted">Could not reach the MCP marketplace API.</div>`;
+    }
+  }
 
-/* ── time ── */
+  function renderMcp(servers) {
+    const grid = $("#mcp-grid");
+    if (!servers.length) {
+      grid.innerHTML = `<div class="muted">No MCP servers match.</div>`;
+      return;
+    }
+    grid.innerHTML = "";
+    servers.forEach((s) => {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.innerHTML = `
+        <div class="card-head">
+          <span class="card-title">${escapeHtml(s.name)}</span>
+          <span class="card-badge ${s.installed ? "on" : ""}">${s.installed ? "installed" : s.transport}</span>
+        </div>
+        <div class="card-desc">${escapeHtml(s.description || "No description available.")}</div>
+        <div class="card-foot">
+          <span class="card-tag">${escapeHtml(s.category)}</span>
+          <button class="btn-ghost mcp-install-btn" data-name="${escapeHtml(s.name)}" ${s.installed ? "disabled" : ""}>
+            ${s.installed ? "Installed" : "Install"}
+          </button>
+        </div>`;
+      grid.appendChild(card);
+    });
 
-function updateTime() {
-  document.getElementById('header-time').textContent = new Date().toLocaleTimeString();
-  document.getElementById('console-timestamp').textContent = new Date().toLocaleTimeString();
-}
+    $$(".mcp-install-btn", grid).forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "Installing…";
+        try {
+          const res = await fetch("/api/mcp/install", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: btn.dataset.name }),
+          });
+          const result = await res.json();
+          if (result.status === "success") {
+            btn.textContent = "Installed";
+          } else {
+            btn.textContent = "Failed";
+            btn.disabled = false;
+          }
+        } catch {
+          btn.textContent = "Failed";
+          btn.disabled = false;
+        }
+      });
+    });
+  }
 
-/* ── utils ── */
+  function initMcpFilters() {
+    let query = "";
+    let category = "";
+    const apply = async () => {
+      const grid = $("#mcp-grid");
+      grid.innerHTML = `<div class="muted">Searching…</div>`;
+      const params = new URLSearchParams();
+      if (query) params.set("q", query);
+      if (category) params.set("category", category);
+      const res = await fetch(`/api/mcp/catalog?${params.toString()}`);
+      const data = await res.json();
+      renderMcp(data.servers || []);
+    };
+    $("#mcp-search").addEventListener("input", (e) => {
+      query = e.target.value;
+      apply();
+    });
+    $("#mcp-category-select").addEventListener("change", (e) => {
+      category = e.target.value;
+      apply();
+    });
+  }
 
-function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
+  // ═══════════ PROVIDERS ═══════════
 
-/* ── init ── */
+  async function loadProviders() {
+    const grid = $("#providers-grid");
+    grid.innerHTML = `<div class="muted">Loading providers…</div>`;
+    try {
+      const res = await fetch("/api/providers");
+      const data = await res.json();
+      const providers = data.providers || data || [];
+      if (!Array.isArray(providers) || !providers.length) {
+        grid.innerHTML = `<div class="muted">No providers configured yet. Run <code>nexus setup</code> in your terminal.</div>`;
+        return;
+      }
+      grid.innerHTML = "";
+      providers.forEach((p) => {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+          <div class="card-head">
+            <span class="card-title">${escapeHtml(p.name || "")}</span>
+            <span class="card-badge ${p.active ? "on" : ""}">${p.active ? "active" : "configured"}</span>
+          </div>
+          <div class="card-desc">${escapeHtml(p.model || "")}</div>`;
+        grid.appendChild(card);
+      });
+    } catch {
+      grid.innerHTML = `<div class="muted">Could not reach the providers API.</div>`;
+    }
+  }
 
-async function init() {
-  log('Nexus Neural OS — console online');
-  log('Type a command or navigate the dashboard.');
-  updateTime();
-  await Promise.all([loadOverview(), loadProviders()]);
-  connectSSE();
-  setInterval(() => { updateTime(); loadOverview(); loadProviders(); }, 10000);
-}
-init();
+  // ═══════════ INIT ═══════════
+
+  document.addEventListener("DOMContentLoaded", () => {
+    initSidebar();
+    initComposer();
+    initAgentSpawn();
+    initSkillsSearch();
+    initMcpFilters();
+
+    refreshStatus();
+    refreshVitals();
+    refreshSessions();
+
+    setInterval(refreshStatus, 15000);
+    setInterval(refreshVitals, 10000);
+  });
+})();
