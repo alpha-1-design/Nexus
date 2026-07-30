@@ -79,13 +79,21 @@ Screen {
     text-style: bold;
 }
 
-/* --- Input Bar --- */
+/* --- Input Bar ---
+ * Claude Code's most recognizable visual signature is the rounded,
+ * boxed prompt at the bottom of the screen rather than a plain docked
+ * bar. Match that here instead of a flat top border. */
 #input-bar {
     background: $bg-secondary;
-    border-top: solid $border;
+    border: round $border-active;
     height: 5;
-    padding: 1 2;
+    padding: 0 2;
+    margin: 0 1 1 1;
     dock: bottom;
+}
+
+#input-bar:focus-within {
+    border: round $accent;
 }
 
 .prompt {
@@ -97,7 +105,7 @@ Screen {
 
 .input-field {
     border: none;
-    background: $bg-input;
+    background: $bg-secondary;
     color: $text-primary;
     width: 1fr;
     padding: 0 1;
@@ -107,14 +115,16 @@ Screen {
     border: none;
 }
 
-/* --- Status Bar --- */
+/* --- Status Bar ---
+ * A single unobtrusive line, matching Claude Code's minimal bottom
+ * status line rather than a heavier chrome bar. */
 #status-bar {
-    background: $bg-tertiary;
-    color: $text-secondary;
+    background: $bg-primary;
+    color: $text-dim;
     height: 1;
     dock: bottom;
     padding: 0 2;
-    border-top: solid $border;
+    border-top: none;
 }
 
 /* --- Chat Messages --- */
