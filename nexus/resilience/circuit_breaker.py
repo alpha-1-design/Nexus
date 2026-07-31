@@ -47,7 +47,7 @@ class CircuitBreakerStats:
     total_execution_time: float = 0.0
 
 
-class CircuitBreakerOpen(Exception):
+class CircuitBreakerOpenError(Exception):
     """Raised when circuit breaker is OPEN and rejecting calls."""
 
     def __init__(self, name: str, retry_after: float):
@@ -111,12 +111,12 @@ class CircuitBreaker:
             if current_state == CircuitState.OPEN:
                 self.stats.rejected_calls += 1
                 retry_after = self.config.timeout - (time.time() - self._opened_at)
-                raise CircuitBreakerOpen(self.name, max(0, retry_after))
+                raise CircuitBreakerOpenError(self.name, max(0, retry_after))
 
             if current_state == CircuitState.HALF_OPEN:
                 if self._half_open_calls >= self.config.half_open_max_calls:
                     self.stats.rejected_calls += 1
-                    raise CircuitBreakerOpen(self.name, self.config.timeout)
+                    raise CircuitBreakerOpenError(self.name, self.config.timeout)
                 self._half_open_calls += 1
 
         start = time.time()

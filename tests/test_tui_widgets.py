@@ -113,6 +113,158 @@ class TestSlashCommandDropdown:
         assert new_index == 1
 
 
+class TestSlashCommandDropdownRendering:
+    """Regression tests for a real crash: `SlashCommandDropdown` defined a
+    method named `_render`, which collided with Textual's own internal
+    `Widget._render()` used by the framework to produce the widget's
+    visual output. Because our `_render()` returned None (it only mounted
+    child widgets), Textual treated that None as the render result and
+    crashed with `AttributeError: 'NoneType' object has no attribute
+    'render_strips'` the moment the dropdown was actually drawn on screen.
+    None of the older tests caught this because they replicated the
+    dropdown's index arithmetic inline instead of calling the real
+    `select_next`/`select_prev`/`_rebuild_items` methods and never
+    mounted the widget in a running app to force a real render pass.
+    """
+
+    @pytest.mark.asyncio
+    async def test_dropdown_renders_without_crashing(self):
+        from textual.app import App
+
+        class HarnessApp(App):
+            def compose(self):
+                yield SlashCommandDropdown(filter_text="/h")
+
+        app = HarnessApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # If the _render naming collision regresses, Textual raises
+            # inside its own rendering pipeline during this pause/refresh,
+            # which surfaces as an exception from run_test().
+            dropdown = app.query_one(SlashCommandDropdown)
+            assert len(dropdown.children) > 0
+
+    def test_rebuild_items_method_exists_not_shadowing_render(self):
+        """`_render` must never be reintroduced as a method name on a
+        Textual Container/Widget subclass -- it silently shadows the
+        framework's own internal rendering hook, which caused a real
+        production crash. The rebuild-children logic must live under a
+        different name."""
+        assert hasattr(SlashCommandDropdown, "_rebuild_items")
+        # SlashCommandDropdown itself must not define its own _render;
+        # any _render found on it should only be the one inherited from
+        # Textual's own Widget/Container base classes.
+        own_methods = vars(SlashCommandDropdown)
+        assert "_render" not in own_methods
+
+    @pytest.mark.asyncio
+    async def test_select_next_and_prev_call_real_methods_without_crashing(self):
+        from textual.app import App
+
+        class HarnessApp(App):
+            def compose(self):
+                yield SlashCommandDropdown(filter_text="")
+
+        app = HarnessApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            dropdown = app.query_one(SlashCommandDropdown)
+            start = dropdown.selected_index
+            dropdown.select_next()
+            assert dropdown.selected_index == (start + 1) % len(dropdown._filtered)
+            dropdown.select_prev()
+            assert dropdown.selected_index == start
+            await pilot.pause()  # force another render pass after mutation
+
+
+class TestChatMessageWidgetMarkupSafety:
+    """Regression tests for a real content-corruption bug: message content
+    was passed straight into a Rich-markup-enabled Static widget, so any
+    text containing bracketed substrings that happen to look like style
+    tags -- e.g. `List[int]`, `Dict[str, int]`, `config[key]`, which is
+    extremely common in code a coding agent produces -- was silently
+    stripped from the visible output.
+    """
+
+    def test_type_annotated_code_is_not_stripped(self):
+        from nexus.tui.state import ChatMessage, MessageRole
+        from nexus.tui.widgets import ChatMessageWidget
+        from datetime import datetime
+
+        msg = ChatMessage(
+            role=MessageRole.ASSISTANT,
+            content="def foo(x: List[int]) -> Dict[str, int]: ...",
+            timestamp=datetime.now(),
+        )
+        widget = ChatMessageWidget(msg)
+        # markup must be disabled for content so brackets are never
+        # interpreted as Rich style tags
+        rendered = widget._format_content()
+        assert "List[int]" in rendered
+        assert "Dict[str, int]" in rendered
+
+    @pytest.mark.asyncio
+    async def test_bracketed_content_survives_actual_render(self):
+        from textual.app import App
+        from nexus.tui.state import ChatMessage, MessageRole
+        from nexus.tui.widgets import ChatMessageWidget
+        from datetime import datetime
+
+        msg = ChatMessage(
+            role=MessageRole.ASSISTANT,
+            content="Use config[key] and List[int] carefully.",
+            timestamp=datetime.now(),
+        )
+
+        class HarnessApp(App):
+            def compose(self):
+                yield ChatMessageWidget(msg)
+
+        app = HarnessApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            content_widget = app.query_one(".content")
+            rendered_text = content_widget.content
+            # Whether it's a plain str or a Rich Text object, the bracketed
+            # substrings must be present in the final rendered text.
+            text_str = str(rendered_text)
+            assert "config[key]" in text_str
+            assert "List[int]" in text_str
+
+
+class TestInputBarSingleDispatch:
+    """Regression test for a severe bug: `InputBar.on_input_submitted`
+    posted a `CommandEntered` message but never called `event.stop()`, so
+    the same `Input.Submitted` event continued bubbling to the App's own
+    (now-removed) `on_input_submitted` handler -- meaning every single
+    user message was dispatched and executed *twice*.
+    """
+
+    def test_input_submitted_event_is_stopped(self):
+        from nexus.tui.widgets import InputBar
+        import inspect
+
+        source = inspect.getsource(InputBar.on_input_submitted)
+        assert "event.stop()" in source, (
+            "InputBar.on_input_submitted must call event.stop() or the "
+            "Input.Submitted message will bubble to the App and cause "
+            "duplicate command dispatch"
+        )
+
+    def test_app_no_longer_defines_duplicate_submit_handlers(self):
+        """The App used to define on_input_submitted and
+        on_input_bar_command_entered in addition to the correct
+        on_command_entered handler, causing commands to be processed
+        multiple times over redundant paths. Only on_command_entered
+        should remain."""
+        from nexus.tui.app import NexusTUI
+
+        assert hasattr(NexusTUI, "on_command_entered")
+        assert not hasattr(NexusTUI, "on_input_submitted")
+        assert not hasattr(NexusTUI, "on_input_bar_command_entered")
+        assert not hasattr(NexusTUI, "on_input_key_down")
+
+
 class TestStatusBar:
     def test_default_values(self):
         """Default status bar should have correct initial values."""

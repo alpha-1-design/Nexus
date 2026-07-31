@@ -973,10 +973,11 @@ When using tools, always provide clear feedback about what you're doing.
                 print("  Nothing to undo.")
                 return True
             user_msg = self.messages.pop()
-            asst_msg = self.messages.pop()
+            _asst_msg = self.messages.pop()
             self._undo_stack.append(len(self.session.messages))
             self.session.messages = self.session.messages[:-2]
-            print(f"  {_style('↩', 'yellow')} Undid last exchange ({len(self.messages)} messages remain)")
+            preview = (user_msg.content if hasattr(user_msg, "content") else str(user_msg))[:60]
+            print(f"  {_style('↩', 'yellow')} Undid last exchange: \"{preview}\" ({len(self.messages)} messages remain)")
             return True
 
         elif cmd == "diff":

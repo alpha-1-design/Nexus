@@ -4,12 +4,9 @@ Skills are discovered from a directory of Markdown files (`.md`) with YAML front
 Community skills can be installed from a remote registry (GitHub).
 """
 
-import asyncio
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import yaml
 

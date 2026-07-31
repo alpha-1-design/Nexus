@@ -7,7 +7,6 @@ Drop-in structure: ~/.nexus/plugins/<name>/plugin.yaml + __init__.py
 import importlib
 import importlib.util
 import logging
-import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto

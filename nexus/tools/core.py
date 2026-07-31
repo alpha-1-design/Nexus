@@ -108,7 +108,11 @@ class EditTool(BaseTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="edit",
-            description="Edit a file by replacing exact text. Use 'before' and 'after' context strings to ensure the correct location is modified and to handle duplicate text in the file.",
+            description=(
+                "Edit a file by replacing exact text. Use 'before' and 'after' context "
+                "strings to ensure the correct location is modified and to handle "
+                "duplicate text in the file."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {

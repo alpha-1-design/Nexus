@@ -2,7 +2,6 @@
 
 import json
 import os
-import subprocess
 from pathlib import Path
 
 
@@ -190,7 +189,7 @@ class ProjectInitializer:
                     file_count += 1
 
         # Merge detected languages (prefer marker-detected over file-scanned)
-        for lang, count in sorted(lang_counts.items(), key=lambda x: -x[1]):
+        for lang, _count in sorted(lang_counts.items(), key=lambda x: -x[1]):
             if lang not in info["languages"]:
                 info["languages"].append(lang)
 

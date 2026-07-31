@@ -1,5 +1,6 @@
 """Reusable widgets for the Nexus TUI."""
 
+from rich.markup import escape
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
@@ -43,7 +44,7 @@ class ChatMessageWidget(Container):
         yield Horizontal(
             Static(f"[dim]{timestamp}[/] {prefix} ", classes="timestamp"),
             Static(role_display, classes="role"),
-            Static(self._format_content(), classes="content", markup=True),
+            Static(self._format_content(), classes="content", markup=False),
             classes="message-row",
         )
 
@@ -94,10 +95,10 @@ class ThinkingBlock(Container):
         icon = "▼" if self.expanded else "▶"
         yield Horizontal(
             Static(f"[bold cyan]{icon}[/] [dim]#{self.step.step_number}[/]", classes="step-number"),
-            Static(self.step.description, classes="step-description"),
+            Static(escape(self.step.description), classes="step-description"),
         )
         if self.expanded and self.step.details:
-            yield Static(f"   [dim]{self.step.details}[/]", classes="step-details")
+            yield Static(f"   [dim]{escape(self.step.details)}[/]", classes="step-details")
 
     def on_click(self) -> None:
         self.expanded = not self.expanded
@@ -143,7 +144,7 @@ class ToolStatusWidget(Static):
         }.get(self.tool.status, "[?]")
 
         duration_str = f" [dim]{self.tool.duration_ms}ms[/]" if self.tool.duration_ms else ""
-        return f"{status_icon} {self.tool.name}{duration_str}"
+        return f"{status_icon} {escape(self.tool.name)}{duration_str}"
 
 
 class ToolPanel(Vertical):
@@ -191,8 +192,8 @@ class AgentCard(Static):
             AgentStatus.ERROR: "[bold red]⚠️[/]",
         }.get(self.agent.status, "?")
 
-        model_str = f" [dim]({self.agent.model})[/]" if self.agent.model else ""
-        return f"{status_icon} {self.agent.name}{model_str}"
+        model_str = f" [dim]({escape(self.agent.model)})[/]" if self.agent.model else ""
+        return f"{status_icon} {escape(self.agent.name)}{model_str}"
 
 
 class AgentsPanel(Vertical):
@@ -310,6 +311,24 @@ class InputBar(Container):
                 self.query_one("#command-input", Input).value = self._command_history[self._history_position]
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        # CRITICAL: without stop(), this Input.Submitted message continues
+        # bubbling to ancestors (e.g. the App's own on_input_submitted),
+        # which previously caused every single message to be dispatched
+        # and executed *twice*.
+        event.stop()
+
+        # Input's internal keybinding for Enter consumes the raw key event
+        # before it would ever reach the App's on_key handler, so dropdown
+        # selection has to be handled right here -- at the point where
+        # Enter is genuinely processed -- rather than via a Key event that
+        # never actually arrives while the dropdown is open.
+        dropdown_selection = getattr(self.app, "get_dropdown_selection", lambda: None)()
+        if dropdown_selection is not None:
+            self.query_one("#command-input", Input).value = dropdown_selection + " "
+            if hasattr(self.app, "hide_slash_dropdown"):
+                self.app.hide_slash_dropdown()
+            return
+
         command = event.value.strip()
         if command:
             self.add_to_history(command)
@@ -372,7 +391,7 @@ class SlashCommandDropdown(Container):
 
     def on_mount(self):
         self._update_filtered()
-        self._render()
+        self._rebuild_items()
 
     def _update_filtered(self):
         f = self.filter_text.strip().lower()
@@ -384,9 +403,9 @@ class SlashCommandDropdown(Container):
                 if f in cmd.lower()
             ]
 
-    def _render(self):
+    def _rebuild_items(self):
         self.remove_children()
-        for i, (cmd, desc) in self._filtered[:10]:
+        for i, (cmd, desc) in enumerate(self._filtered[:10]):
             cls = "slash-item highlighted" if i == self.selected_index else "slash-item"
             self.mount(
                 Horizontal(
@@ -399,12 +418,12 @@ class SlashCommandDropdown(Container):
     def select_next(self):
         if self._filtered:
             self.selected_index = (self.selected_index + 1) % len(self._filtered)
-            self._render()
+            self._rebuild_items()
 
     def select_prev(self):
         if self._filtered:
             self.selected_index = (self.selected_index - 1) % len(self._filtered)
-            self._render()
+            self._rebuild_items()
 
     def get_selected(self) -> str | None:
         if self._filtered and 0 <= self.selected_index < len(self._filtered):

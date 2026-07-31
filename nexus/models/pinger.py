@@ -59,7 +59,6 @@ class ModelPinger:
 
         Returns a report with per-model status codes and latency.
         """
-        import httpx
 
         report = ProviderPingReport(
             provider=provider,

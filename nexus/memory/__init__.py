@@ -10,6 +10,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .vectors import (
+    MemoryEntry as MemoryEntry,
+)
+from .vectors import (
+    SimpleKeywordBackend as SimpleKeywordBackend,
+)
+from .vectors import (
+    VectorMemory as VectorMemory,
+)
+from .vectors import (
+    VectorMemoryBackend as VectorMemoryBackend,
+)
+
 
 @dataclass
 class Session:
@@ -233,8 +246,6 @@ class Memory:
 
         return "\n".join(parts) if parts else "(no context stored)"
 
-
-from .vectors import MemoryEntry, SimpleKeywordBackend, VectorMemory, VectorMemoryBackend
 
 # Global memory instance
 _memory: Memory | None = None

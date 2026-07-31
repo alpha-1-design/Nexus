@@ -219,7 +219,17 @@ class SimpleDecomposer(BaseDecomposer):
             ctx["test_cmd"] = "echo '2 3' | python"
         elif "todo" in task_lower:
             ctx["content"] = (
-                "# Todo app\ntodos = []\n\ndef add(item):\n    todos.append(item)\n    return todos\n\ndef list_todos():\n    for t in todos:\n        print(f'- {t}')\n\nif __name__ == '__main__':\n    add('test item')\n    list_todos()\n"
+                "# Todo app\n"
+                "todos = []\n\n"
+                "def add(item):\n"
+                "    todos.append(item)\n"
+                "    return todos\n\n"
+                "def list_todos():\n"
+                "    for t in todos:\n"
+                "        print(f'- {t}')\n\n"
+                "if __name__ == '__main__':\n"
+                "    add('test item')\n"
+                "    list_todos()\n"
             )
         elif "index.html" in task_lower or ("html" in task_lower and "browser" in task_lower):
             ctx["content"] = "<!DOCTYPE html>\n<html>\n<head><title>App</title></head>\n<body><h1>Hello</h1></body>\n</html>\n"

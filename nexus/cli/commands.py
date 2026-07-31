@@ -1,9 +1,9 @@
 """Nexus CLI - Command line interface for Nexus."""
 
 import asyncio
-import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -11,6 +11,7 @@ from nexus import __version__
 from nexus.config import NexusConfig, save_config
 from nexus.providers import Message, get_manager
 from nexus.tools import get_registry
+from nexus.utils.dependencies import ensure_dependency
 from nexus.voice import get_voice_engine, list_tts_voices
 
 _style = click.style
@@ -340,7 +341,6 @@ def model_discover(
     import asyncio
 
     from nexus.config import load_config, save_config
-    from nexus.models.pinger import ModelPinger
 
     config = load_config()
 
@@ -991,9 +991,6 @@ def doctor(ctx: click.Context) -> None:
         click.echo("\n[+] All checks passed!")
 
 
-from ..utils.dependencies import ensure_dependency
-
-
 # Dashboard command (optional — lazy loaded)
 @cli.command("dashboard")
 @click.option("--port", default=5000, help="Port to run on")
@@ -1420,7 +1417,7 @@ def mcp_install(name: str):
 
     env_vars = cfg.get("env_vars") or []
     if env_vars:
-        entry["env"] = {k: "" for k in env_vars}
+        entry["env"] = dict.fromkeys(env_vars, "")
 
     servers[name] = entry
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1465,7 +1462,6 @@ def exec_cmd(command: tuple[str, ...], timeout: int, shell: bool) -> None:
     Use --no-shell to avoid shell interpretation (safer for dynamic args).
     """
     import asyncio
-    import shlex
 
     cmd_str = " ".join(command) if shell else list(command)
     click.echo(f"\n\033[36m\u25B6 Executing: {cmd_str}\033[0m\n")
@@ -1549,7 +1545,7 @@ def skill_search(query: str) -> None:
         badge = " \033[90m[bundled]\033[0m" if s.get("source") == "bundled" else ""
         click.echo(f"  \033[1m{s.get('name')}\033[0m  \033[90mv{s.get('version', '1.0')}\033[0m{badge}")
         click.echo(f"      {s.get('description', 'No description')}{tag_str}")
-    click.echo(f"\nInstall with: \033[36mnexus skill install <name>\033[0m")
+    click.echo("\nInstall with: \033[36mnexus skill install <name>\033[0m")
 
 
 @skill.command("install")
@@ -1713,7 +1709,8 @@ def status_cmd(json_output: bool) -> None:
 
     click.echo()
     click.echo(f"  {c('N E X U S', bold=True)}  {c(ver, fg='cyan')}")
-    click.echo(f"  {c('\u2500' * 50, fg='bright_black')}")
+    _dash = "\u2500" * 50
+    click.echo(f"  {c(_dash, fg='bright_black')}")
     click.echo(f"  {c('Provider', bold=True)}    {c(active_provider, fg='green')} {c(provider_type, fg='bright_black')}")
     click.echo(f"  {c('Model', bold=True)}       {c(active_model, fg='white')}")
     click.echo(f"  {c('Sessions', bold=True)}    {c(str(session_count), fg='white')}")
@@ -1827,7 +1824,7 @@ def auth_add(
 
     click.echo(f"  \033[32m\u2713 Provider '{provider_name}' configured\033[0m")
     if set_active:
-        click.echo(f"  \033[90mSet as active provider\033[0m")
+        click.echo("  \033[90mSet as active provider\033[0m")
 
 
 @auth.command("remove")
@@ -1897,13 +1894,13 @@ def auth_check(provider_name: str | None) -> None:
                 timeout=5,
             )
             if resp.status_code == 200:
-                click.echo(f"\033[32m\u2713 OK\033[0m")
+                click.echo("\033[32m\u2713 OK\033[0m")
             elif resp.status_code == 401:
-                click.echo(f"\033[31m\u2717 Invalid key\033[0m")
+                click.echo("\033[31m\u2717 Invalid key\033[0m")
             else:
                 click.echo(f"\033[33m\u26A0 HTTP {resp.status_code}\033[0m")
         except httpx.ConnectError:
-            click.echo(f"\033[31m\u2717 Connection failed\033[0m")
+            click.echo("\033[31m\u2717 Connection failed\033[0m")
         except Exception as e:
             click.echo(f"\033[31m\u2717 {e}\033[0m")
 
@@ -1979,7 +1976,6 @@ def logs_cmd(
         nexus logs --clear           # delete all logs
     """
     import json as _json
-    import time
 
     log_dir = Path.home() / ".nexus" / "logs"
     log_file = log_dir / "nexus.log"
@@ -1987,9 +1983,9 @@ def logs_cmd(
     if clear_logs:
         if log_file.exists():
             log_file.write_text("")
-            click.echo(f"  \033[32m\u2713 Logs cleared\033[0m")
+            click.echo("  \033[32m\u2713 Logs cleared\033[0m")
         else:
-            click.echo(f"  \033[33mNo logs to clear\033[0m")
+            click.echo("  \033[33mNo logs to clear\033[0m")
         return
 
     if not log_file.exists():
@@ -2064,7 +2060,7 @@ def _tail_logs(log_file: Path, level: str | None) -> None:
     """Tail log file in real-time."""
     import time
 
-    click.echo(f"  \033[36mTailing logs... Ctrl+C to stop\033[0m\n")
+    click.echo("  \033[36mTailing logs... Ctrl+C to stop\033[0m\n")
     try:
         with open(log_file) as f:
             # Seek to end
@@ -2208,7 +2204,7 @@ def completion_install(shell: str | None) -> None:
             Path(rc).write_text(script)
         else:
             with open(rc, "a") as f:
-                f.write(f"\n# Nexus completion\n")
+                f.write("\n# Nexus completion\n")
                 f.write(f"eval '$({_script_name()} completion {shell})'\n")
         click.echo(f"  \033[32m\u2713 Completion installed for {shell}\033[0m")
         click.echo(f"  \033[90mRun: source {rc}\033[0m")
@@ -2309,9 +2305,9 @@ def reset_cmd(hard: bool, keep_providers: bool, force: bool) -> None:
             with open(config_path, "w") as f:
                 _json.dump(cfg, f, indent=2)
 
-            click.echo(f"  \033[32m\u2713 Configuration reset\033[0m")
+            click.echo("  \033[32m\u2713 Configuration reset\033[0m")
             if keep_providers:
-                click.echo(f"  \033[90mProviders preserved\033[0m")
+                click.echo("  \033[90mProviders preserved\033[0m")
         except Exception as e:
             click.echo(f"  \033[31m\u2717 Config reset failed: {e}\033[0m")
 
@@ -2397,8 +2393,9 @@ def plugin_disable(name: str) -> None:
 @click.argument("path", type=click.Path(exists=True))
 def plugin_install(path: str) -> None:
     """Install a plugin from a directory or .py file."""
-    from nexus.plugins import get_plugin_manager
     import shutil
+
+    from nexus.plugins import get_plugin_manager
     src = Path(path)
     dest_dir = Path.home() / ".nexus" / "plugins"
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -2460,6 +2457,7 @@ def scan_cmd(path: str, output: str, depth: int) -> None:
         nexus scan --output tree       # directory tree view
     """
     import json as _json
+
     from nexus.project import ProjectInitializer
 
     project_dir = Path(path).resolve()
@@ -2583,7 +2581,7 @@ def export_cmd(output: str | None, include: list[str]) -> None:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
-        manifest: dict[str, list[str]] = {"exported_at": timestamp, "components": []}
+        manifest: dict[str, Any] = {"exported_at": timestamp, "components": []}
 
         for component in include:
             component = component.lower()
@@ -2901,7 +2899,12 @@ def agents_list() -> None:
         name = getattr(a, "name", "?")
         role = getattr(a, "role", "?")
         status = getattr(a, "status", "?")
-        click.echo(f"  {_style(name, bold=True):25s} {_style(str(role.value if hasattr(role, 'value') else role), 'cyan'):20s} {_style(str(status.value if hasattr(status, 'value') else status), 'bright_black')}")
+        role_str = role.value if hasattr(role, "value") else role
+        status_str = status.value if hasattr(status, "value") else status
+        click.echo(
+            f"  {_style(name, bold=True):25s} {_style(str(role_str), 'cyan'):20s} "
+            f"{_style(str(status_str), 'bright_black')}"
+        )
     if not agent_list:
         click.echo(f"  {_style('No active agents.', 'bright_black')}")
         click.echo(f"  {_style('Use nexus agents spawn <task>', 'bright_black')} to create one.")
@@ -2915,10 +2918,13 @@ def agents_list() -> None:
 def agents_spawn(task: str, name: str | None, role: str) -> None:
     """Spawn a new agent for a specific task."""
     from nexus.agents import AgentRole, MultiAgentTeam
-    from nexus.config import load_config
+    from nexus.providers import get_manager
 
-    config = load_config()
-    team = MultiAgentTeam(provider_manager=None)
+    # main() already calls initialize_providers(config) once at startup,
+    # which populates this singleton -- reuse it rather than silently
+    # spawning agents with no provider_manager (which was happening here
+    # before: a config was loaded but never actually used).
+    team = MultiAgentTeam(provider_manager=get_manager())
 
     role_map = {
         "lead": AgentRole.LEAD,
@@ -2971,14 +2977,12 @@ def team_cmd(task: str, members: int) -> None:
         nexus team \"Refactor the codebase\" --members 5
     """
     from nexus.agents import AgentRole, MultiAgentTeam
-    from nexus.config import load_config
-
-    config = load_config()
+    from nexus.providers import get_manager
 
     click.echo(f"\n  {_style('Assembling team for:', 'cyan')} {_style(task, 'white', bold=True)}")
     click.echo(f"  {_style('─' * 50, 'bright_black')}")
 
-    team = MultiAgentTeam(lead_name="nexus-lead", provider_manager=None)
+    team = MultiAgentTeam(lead_name="nexus-lead", provider_manager=get_manager())
 
     roles = [AgentRole.PLANNER, AgentRole.RESEARCHER, AgentRole.REVIEWER]
     spawned = []
@@ -3034,7 +3038,7 @@ def main():
     # hijacked into the full interactive setup/diagnostics wizard just
     # because no provider is configured yet. Only gate provider-dependent
     # commands (chat/REPL, TUI, agents, run) behind the setup flow.
-    PROVIDER_INDEPENDENT_COMMANDS = {
+    PROVIDER_INDEPENDENT_COMMANDS = {  # noqa: N806 -- intentionally constant-style
         "mcp", "skill", "plugin", "config", "doctor", "auth", "completion",
         "upgrade", "safety", "sync", "learn", "phone", "voice", "exec",
         "termux", "self-improve", "self_improve",

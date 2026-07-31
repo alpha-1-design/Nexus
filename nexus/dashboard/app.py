@@ -221,7 +221,7 @@ def api_chat_stream():
         return jsonify({"error": "No message provided"}), 400
 
     q: queue.Queue = queue.Queue()
-    _SENTINEL = object()
+    _sentinel = object()
 
     def on_chunk(text: str) -> None:
         q.put({"type": "delta", "content": text})
@@ -233,14 +233,14 @@ def api_chat_stream():
         except Exception as e:  # noqa: BLE001
             q.put({"type": "error", "error": str(e)})
         finally:
-            q.put(_SENTINEL)
+            q.put(_sentinel)
 
     threading.Thread(target=worker, daemon=True).start()
 
     def generate():
         while True:
             item = q.get()
-            if item is _SENTINEL:
+            if item is _sentinel:
                 break
             yield f"data: {json.dumps(item)}\n\n"
         yield "event: close\ndata: {}\n\n"

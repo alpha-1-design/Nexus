@@ -8,6 +8,7 @@ Architecture:
 """
 
 import asyncio
+import importlib.util
 import json
 import sqlite3
 import threading
@@ -17,12 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-try:
-    import numpy as np
-
-    NUMPY_AVAILABLE = True
-except ImportError:
-    NUMPY_AVAILABLE = False
+NUMPY_AVAILABLE = importlib.util.find_spec("numpy") is not None
 
 
 @dataclass

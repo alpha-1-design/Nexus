@@ -20,7 +20,6 @@ import click
 
 from ..config import NexusConfig, ProviderConfig, save_config
 
-
 # =============================================================================
 # Terminal styling utilities
 # =============================================================================
@@ -759,7 +758,6 @@ class OnboardingManager:
         )
 
         registry = get_registry()
-        spinner_frames = ["◢", "◣", "◤", "◥"]
 
         try:
             models = asyncio.run(
@@ -1147,7 +1145,7 @@ class OnboardingManager:
         click.echo(f"  {_c('═' * (cols - 2), 'green')}")
         click.echo()
 
-        greeting = f"Nexus is ready"
+        greeting = "Nexus is ready"
         if self.user_name:
             greeting = f"{self.user_name}, Nexus is ready"
         click.echo(f"  {_c(greeting, 'white', bold=True)}")

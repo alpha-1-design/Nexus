@@ -3,8 +3,6 @@
 import os
 import platform
 import shutil
-import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -194,7 +192,6 @@ class NexusDoctor:
         g = "\033[32m"
         r = "\033[31m"
         y = "\033[33m"
-        p = "\033[35m"
         d = "\033[90m"
         b = "\033[1m"
         w = "\033[97m"
@@ -240,12 +237,12 @@ class NexusDoctor:
             print(f"  {c}\u2502{n}  {b}{w}SYSTEM{n}" + " " * (term_width - 14) + f"{c}\u2502{n}")
 
             rows = [
-                (f"OS", f"{os_info}"),
-                (f"Python", f"{py_ver}"),
-                (f"CPUs", f"{cpus} cores"),
-                (f"Memory", f"{mem_total}"),
-                (f"Disk", f"{disk_used} / {disk_total}  ({disk_free} free)"),
-                (f"Load", f"1m: {load_1m}  5m: {load_5m}  15m: {load_15m}"),
+                ("OS", f"{os_info}"),
+                ("Python", f"{py_ver}"),
+                ("CPUs", f"{cpus} cores"),
+                ("Memory", f"{mem_total}"),
+                ("Disk", f"{disk_used} / {disk_total}  ({disk_free} free)"),
+                ("Load", f"1m: {load_1m}  5m: {load_5m}  15m: {load_15m}"),
             ]
             for label, val in rows:
                 padded = label.rjust(8)

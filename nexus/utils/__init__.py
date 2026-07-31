@@ -3,9 +3,9 @@
 import asyncio
 import logging
 import re
-import sys
-from collections.abc import Callable
 from typing import Any, TypeVar
+
+from ..errors import NexusError
 
 T = TypeVar("T")
 
@@ -100,9 +100,6 @@ def sanitize_error(error: str | Exception, max_length: int = 200) -> str:
         sanitized = sanitized[:max_length] + "..."
 
     return sanitized
-
-
-from ..errors import NexusError
 
 
 def format_error(error: Exception | str) -> str:

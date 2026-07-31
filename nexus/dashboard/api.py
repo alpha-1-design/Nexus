@@ -4,6 +4,7 @@ Provides all data-access methods used by the Flask routes.
 Kept clean — no HTTP, no request/response objects.
 """
 
+import importlib.util
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -243,7 +244,7 @@ class NexusAPI:
             entry["args"] = cfg.get("args", [])
         env_vars = cfg.get("env_vars") or []
         if env_vars:
-            entry["env"] = {k: "" for k in env_vars}
+            entry["env"] = dict.fromkeys(env_vars, "")
 
         servers[name] = entry
         path = self._mcp_config_path()
@@ -479,12 +480,7 @@ class NexusAPI:
             has_session = BrowserManager.get() is not None
         except Exception:
             pass
-        httpx_available = False
-        try:
-            import httpx
-            httpx_available = True
-        except ImportError:
-            pass
+        httpx_available = importlib.util.find_spec("httpx") is not None
         registry = get_registry()
         browser_tools = [t for t in registry.list_all() if t.category == "automation"]
         return {

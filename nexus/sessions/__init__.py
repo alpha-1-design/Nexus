@@ -7,8 +7,6 @@ On project change: switches project context automatically
 
 import asyncio
 import json
-import os
-import shutil
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path

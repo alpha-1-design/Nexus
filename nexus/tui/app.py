@@ -12,8 +12,6 @@ from textual.widgets import Footer, Header, Input
 
 from ..agent import get_orchestrator
 from .state import (
-    AgentInfo,
-    AgentStatus,
     ChatMessage,
     MessageRole,
     TUIState,
@@ -94,6 +92,7 @@ class NexusTUI(App):
         self.state_manager.subscribe(self._on_state_change)
 
         import threading
+
         from ..memory.shadow import get_shadow_indexer
         self.shadow_indexer = get_shadow_indexer()
         threading.Thread(target=self.shadow_indexer.start, daemon=True).start()
@@ -124,39 +123,35 @@ class NexusTUI(App):
         elif event.key == "down":
             dropdown.select_next()
             event.stop()
-        elif event.key == "enter":
-            selected = dropdown.get_selected()
-            if selected:
-                self.query_one("#command-input", Input).value = selected + " "
-                self._hide_dropdown()
-            event.stop()
         elif event.key == "escape":
             self._hide_dropdown()
             event.stop()
+        # Note: Enter is deliberately not handled here. Input's own
+        # keybinding consumes Enter internally to emit Input.Submitted
+        # before the raw Key event would ever bubble up to this handler,
+        # so dropdown selection on Enter is handled in
+        # InputBar.on_input_submitted instead, which is where Enter is
+        # actually observable.
+
+    def get_dropdown_selection(self) -> str | None:
+        """Return the currently-highlighted slash command, if the dropdown
+        is open. Used by InputBar to resolve Enter-to-select instead of
+        submitting the raw partially-typed text."""
+        if not self._show_dropdown:
+            return None
+        try:
+            dropdown = self.query_one(SlashCommandDropdown)
+        except Exception:
+            return None
+        return dropdown.get_selected()
+
+    def hide_slash_dropdown(self) -> None:
+        """Public wrapper so other widgets (e.g. InputBar) can close the
+        dropdown without reaching into a private method."""
+        self._hide_dropdown()
 
     def action_dismiss_dropdown(self) -> None:
         self._hide_dropdown()
-
-    def on_input_key_down(self, event: events.Key) -> None:
-        if self._show_dropdown:
-            dropdown = self.query_one(SlashCommandDropdown)
-            if event.key == "up":
-                dropdown.select_prev()
-                event.stop()
-            elif event.key == "down":
-                dropdown.select_next()
-                event.stop()
-            elif event.key == "enter":
-                selected = dropdown.get_selected()
-                if selected:
-                    self.query_one("#command-input", Input).value = selected + " "
-                    self._hide_dropdown()
-                event.stop()
-            elif event.key == "escape":
-                self._hide_dropdown()
-                event.stop()
-        elif event.key == "escape":
-            self._hide_dropdown()
 
     def _on_state_change(self, state: TUIState) -> None:
         self._update_status_bar()
@@ -190,7 +185,7 @@ class NexusTUI(App):
             dropdown = existing.first()
             dropdown.filter_text = filter_text
             dropdown._update_filtered()
-            dropdown._render()
+            dropdown._rebuild_items()
             return
 
         dropdown = SlashCommandDropdown(filter_text=filter_text)
@@ -205,10 +200,10 @@ class NexusTUI(App):
             existing.remove()
         self.query_one("#command-input", Input).focus()
 
-    def action_dismiss_dropdown(self):
-        self._hide_dropdown()
-
     def on_command_entered(self, event: CommandEntered) -> None:
+        if event.command:
+            self._command_history.append(event.command)
+            self._history_index = len(self._command_history)
         task = OrchestrationTask(self, self._process_input(event.command))
         asyncio.create_task(task.run())
 
@@ -400,7 +395,7 @@ class NexusTUI(App):
             # System vitals
             sys_data = report.get("system", {})
             if sys_data:
-                lines.append(f"[bold]SYSTEM[/]")
+                lines.append("[bold]SYSTEM[/]")
                 lines.append(f"  OS: [white]{sys_data.get('os', '?')}[/]")
                 lines.append(f"  Python: [white]{sys_data.get('python', '?')}[/]")
                 lines.append(f"  CPUs: [white]{sys_data.get('cpus', '?')}[/] cores")
@@ -575,22 +570,6 @@ class NexusTUI(App):
             timestamp=datetime.now(),
         ))
         self.state_manager.set_busy(False)
-
-    def on_input_bar_command_entered(self, event: CommandEntered) -> None:
-        command = str(event).strip()
-        if command:
-            self._command_history.append(command)
-            self._history_index = len(self._command_history)
-        asyncio.create_task(self._process_input(command))
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        command = event.value.strip()
-        if command:
-            self._command_history.append(command)
-            self._history_index = len(self._command_history)
-        asyncio.create_task(self._process_input(command))
-        self.query_one("#input-bar", InputBar).clear()
-
 
 def run_tui() -> None:
     """Run the TUI application."""
