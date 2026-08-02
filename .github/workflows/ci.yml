@@ -29,8 +29,7 @@ jobs:
           
       - name: Install dependencies
         run: |
-          pip install -e ".[voice,automation,all]"
-          pip install pytest pytest-asyncio ruff mypy || true
+          pip install -e ".[dev,tui,dashboard,voice,browser,all]"
           
       - name: Lint
         run: ruff check nexus/

@@ -383,7 +383,13 @@ class BrowserAutomation:
                     await self._page.click(f'{field_data.selector}[value="{field_data.value}"]')
                 else:
                     delay = field_data.delay or random.randint(30, 80)
-                    await self._page.fill(field_data.selector, field_data.value, delay=delay)
+                    # Page.fill() has no `delay` param -- it sets the value
+                    # instantly. Page.type() is the real API for simulating
+                    # human-like per-character typing speed, which is
+                    # clearly the intent given the randomized delay above.
+                    await self._page.click(field_data.selector)
+                    await self._page.fill(field_data.selector, "")
+                    await self._page.type(field_data.selector, field_data.value, delay=delay)
 
                 filled.append(field_data.selector)
             except Exception as e:
