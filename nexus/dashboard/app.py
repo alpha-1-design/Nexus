@@ -23,7 +23,10 @@ def _get_api():
 
 
 def _vitals():
-    import psutil
+    try:
+        import psutil
+    except ImportError:
+        return {"disk": "?", "cpu": "?"}
     out = {}
     try:
         out["disk"] = f"{psutil.disk_usage('/').percent}%"

@@ -70,6 +70,15 @@ and configure directly with `nexus auth`.
 (`pip install -e ".[voice]"`) and browser automation
 (`pip install -e ".[browser]"`).
 
+> **Termux note:** `install.sh` only ever installs `tui` + `dashboard`
+> (pure Python, plus `psutil`) — that's the tested, supported target for
+> Android. Voice mode is currently a stub with nothing actually wired up
+> yet, so there's no reason to install those extras today regardless of
+> platform. Browser automation (`playwright`) is not realistically usable
+> on stock Termux — it ships prebuilt browser binaries for glibc Linux,
+> which don't run under Android's bionic libc without a full `proot-distro`
+> Linux chroot. Nexus degrades gracefully without it either way.
+
 **Verify the install worked:**
 ```bash
 nexus doctor       # full diagnostic report — dependencies, config, provider, git

@@ -131,3 +131,24 @@ def test_api_sessions(client):
 def test_api_providers(client):
     resp = client.get("/api/providers")
     assert resp.status_code == 200
+
+
+def test_vitals_degrades_gracefully_without_psutil(monkeypatch):
+    """Regression: _vitals() used to `import psutil` unguarded at the top
+    of the function, so a missing/unbuildable psutil (a real possibility
+    on non-glibc platforms like Termux) would hard-crash the endpoint
+    instead of degrading to '?' like the rest of the metrics already did.
+    """
+    import builtins
+    from nexus.dashboard.app import _vitals
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "psutil":
+            raise ImportError("simulated: psutil not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    result = _vitals()
+    assert result == {"disk": "?", "cpu": "?"}
