@@ -213,10 +213,10 @@ class NexusDoctor:
 
         # === HEADER ===
         print()
-        print(f"  {c}{b}\u250C" + "\u2500" * (term_width - 6) + "\u2510{n}")
+        print(f"  {c}{b}\u250C" + "\u2500" * (term_width - 6) + f"\u2510{n}")
         print(f"  {c}{b}\u2502{n}  {w}{b}NEXUS SYSTEM DIAGNOSTICS{n}" + " " * (term_width - 32) + f"{c}{b}\u2502{n}")
         print(f"  {c}{b}\u2502{n}  {d}Comprehensive self-diagnostic and health check{n}" + " " * (term_width - 47) + f"{c}{b}\u2502{n}")
-        print(f"  {c}{b}\u2514" + "\u2500" * (term_width - 6) + "\u2518{n}")
+        print(f"  {c}{b}\u2514" + "\u2500" * (term_width - 6) + f"\u2518{n}")
         print()
 
         # === SYSTEM VITALS SUMMARY ===
@@ -233,7 +233,7 @@ class NexusDoctor:
             load_5m = sys_data.get("load_5m", "?")
             load_15m = sys_data.get("load_15m", "?")
 
-            print(f"  {c}\u250C" + "\u2500" * (term_width - 6) + "\u2510{n}")
+            print(f"  {c}\u250C" + "\u2500" * (term_width - 6) + f"\u2510{n}")
             print(f"  {c}\u2502{n}  {b}{w}SYSTEM{n}" + " " * (term_width - 14) + f"{c}\u2502{n}")
 
             rows = [
@@ -247,11 +247,11 @@ class NexusDoctor:
             for label, val in rows:
                 padded = label.rjust(8)
                 print(f"  {c}\u2502{n}   {d}{padded}{n}  {w}{val}{n}" + " " * (term_width - 22 - len(val)) + f"{c}\u2502{n}")
-            print(f"  {c}\u2514" + "\u2500" * (term_width - 6) + "\u2518{n}")
+            print(f"  {c}\u2514" + "\u2500" * (term_width - 6) + f"\u2518{n}")
             print()
 
         # === CHECKS ===
-        print(f"  {c}\u250C" + "\u2500" * (term_width - 6) + "\u2510{n}")
+        print(f"  {c}\u250C" + "\u2500" * (term_width - 6) + f"\u2510{n}")
         print(f"  {c}\u2502{n}  {b}{w}COMPONENT STATUS{n}" + " " * (term_width - 24) + f"{c}\u2502{n}")
         print(f"  {c}\u2502{n}" + " " * (term_width - 4) + f"{c}\u2502{n}")
 
@@ -321,21 +321,21 @@ class NexusDoctor:
 
         print(f"  {c}\u2502{n}  {d}Health Score:{n}  {bar}  {score_color}{b}{score:.0%}{n}" + " " * (term_width - 42) + f"{c}\u2502{n}")
         print(f"  {c}\u2502{n}  {d}Passed:{n} {g}{passed_checks}{n}/{total_checks}" + " " * (term_width - 30) + f"{c}\u2502{n}")
-        print(f"  {c}\u2514" + "\u2500" * (term_width - 6) + "\u2518{n}")
+        print(f"  {c}\u2514" + "\u2500" * (term_width - 6) + f"\u2518{n}")
 
         # === FAILURE DETAILS ===
         failures = [(cat, result) for cat, result in report.items()
                      if not (result.get("passed", True) and "error" not in result)]
         if failures:
             print()
-            print(f"  {r}\u250C" + "\u2500" * (term_width - 6) + "\u2510{n}")
+            print(f"  {r}\u250C" + "\u2500" * (term_width - 6) + f"\u2510{n}")
             print(f"  {r}\u2502{n}  {r}{b}ISSUES FOUND{n}" + " " * (term_width - 20) + f"{r}\u2502{n}")
             print(f"  {r}\u2502{n}" + " " * (term_width - 4) + f"{r}\u2502{n}")
             for cat, result in failures:
                 label = cat.replace("_", " ").upper()
                 error = result.get("error", "Check failed")
                 print(f"  {r}\u2502{n}   {r}\u2717{n}  {b}{label}{n}  {d}{error[:70]}{n}" + " " * max(2, term_width - 80 - len(label)) + f"{r}\u2502{n}")
-            print(f"  {r}\u2514" + "\u2500" * (term_width - 6) + "\u2518{n}")
+            print(f"  {r}\u2514" + "\u2500" * (term_width - 6) + f"\u2518{n}")
 
         print()
 
@@ -401,7 +401,19 @@ class NexusDoctor:
 
         try:
             import asyncio
-            result = asyncio.run(mgr.check_connection())
+
+            async def _check() -> bool:
+                # ProviderManager has no check_connection method (that was
+                # a guaranteed AttributeError on every single doctor run).
+                # get_provider() is the real, existing entry point: it
+                # validates the active provider can actually be
+                # instantiated (catches missing/invalid API key config)
+                # without spending tokens or time on a full network round
+                # trip, which would be too heavy to run on every startup.
+                await mgr.get_provider(active)
+                return True
+
+            result = asyncio.run(_check())
             return {
                 "passed": result,
                 "active_provider": active,
@@ -494,4 +506,10 @@ def run_doctor(interactive: bool = True):
     if interactive and not report["config"]["configured"]:
         doctor.interactive_setup()
 
-    doctor.discover_skills()
+    # Skill discovery can prompt for confirmation per discovered tool; that
+    # must never run in a non-interactive context (piped output, CI,
+    # --non-interactive), or it blocks forever on a read from a closed/
+    # redirected stdin. This previously ran unconditionally regardless of
+    # the `interactive` flag.
+    if interactive:
+        doctor.discover_skills()

@@ -35,7 +35,7 @@ fi
 # 3. Install/Update Nexus
 echo -e "  ${NC}╰ Syncing synaptic dependencies...${NC}"
 "$VENV_DIR/bin/pip" install --upgrade pip &> /dev/null
-"$VENV_DIR/bin/pip" install -e . &> /dev/null
+"$VENV_DIR/bin/pip" install -e ".[tui,dashboard]" &> /dev/null
 
 # 4. Create Global Shim
 SHIM_PATH="$BIN_DIR/nexus"
