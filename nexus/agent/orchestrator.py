@@ -17,6 +17,7 @@ from ..orchestrator.executor import ExecutionEngine
 from ..plugins import get_plugin_manager
 from ..providers import Message, ProviderManager, ToolCall
 from ..safety import get_safety_engine
+from ..skills.matcher import format_relevant_skills, get_skill_matcher
 from ..thinking import ThinkingState, get_thinking_engine
 from ..tools import ToolRegistry, ToolResult
 from ..utils import format_error
@@ -96,6 +97,9 @@ class Turn:
     duration_ms: int = 0
     error: str | None = None
     pending_approval: dict[str, Any] | None = None
+    # Names of bundled skills matched for this turn's task (skill
+    # pre-loading), empty when nothing scored above the relevance threshold.
+    skills_loaded: list[str] = field(default_factory=list)
 
 
 class AgentOrchestrator:
@@ -144,6 +148,8 @@ class AgentOrchestrator:
         self._turn_count = 0
         self._tool_stats: dict[str, dict] = {}
         self._team: MultiAgentTeam | None = None
+        # Skill pre-loading usage: name -> number of turns it was matched in.
+        self._skill_usage: dict[str, int] = {}
 
         # ── memory layer ──────────────────────────────────────
         # `self.memory` (structured facts/sessions) was previously stored
@@ -241,6 +247,12 @@ class AgentOrchestrator:
         turn = Turn(user_message=user_input)
         self._turn_count += 1
 
+        # TUI convenience: app.py routes unhandled slash commands to the
+        # engine, so answer /skills lookups here without burning an LLM
+        # call. (The interactive REPL handles /skills itself first.)
+        if user_input.strip().lower().startswith("/skills"):
+            return await self._run_skills_lookup(user_input)
+
         if thinking_callback:
             self._thinking_callback = thinking_callback
             self._thinking.on_update(thinking_callback)
@@ -251,6 +263,32 @@ class AgentOrchestrator:
         )
 
         self._messages.append(Message(role="user", content=user_input))
+
+        # Skill pre-loading: match bundled skills for this task before the
+        # first LLM call and inject a compact section, the same way memory
+        # recall is inserted (as a system note before this turn's user
+        # message, subject to normal pruning — nothing lingers into later
+        # turns that no longer applies).
+        skill_matches = self.match_skills(user_input)
+        if skill_matches:
+            turn.skills_loaded = [m.name for m in skill_matches]
+            for name in turn.skills_loaded:
+                self._skill_usage[name] = self._skill_usage.get(name, 0) + 1
+            skill_note = format_relevant_skills(skill_matches)
+            if skill_note:
+                self._messages.insert(
+                    len(self._messages) - 1,
+                    Message(role="system", content=skill_note),
+                )
+            # Visible in the TUI: the ThinkingEngine feeds the ThinkingPanel,
+            # so a matched turn shows one dim "⚡ N skills loaded" step.
+            skill_step = self._thinking.start_step(
+                ThinkingState.ANALYZING,
+                f"⚡ {len(skill_matches)} skills loaded: {', '.join(turn.skills_loaded)}",
+                detail="Matched from the bundled skill library before the first LLM call.",
+            )
+            self._thinking.finish_step(skill_step, result="activate with /skill <name>")
+        self._notify_ui("skills_loaded", {"skills": turn.skills_loaded})
 
         memory_note = await self._build_memory_context(user_input)
         if memory_note:
@@ -306,6 +344,62 @@ class AgentOrchestrator:
             except Exception:
                 self._vector_memory = False  # sentinel: creation failed, don't retry every turn
         return self._vector_memory or None
+
+    def match_skills(self, task_text: str, top_n: int | None = None) -> list:
+        """Match bundled skills for a task via the shared keyword matcher.
+
+        Never raises: a broken skills install must not break a turn, so
+        failures degrade to "no skills matched".
+        """
+        try:
+            return get_skill_matcher().match(task_text, top_n=top_n)
+        except Exception:
+            return []
+
+    def skill_note_for(self, task_text: str) -> str | None:
+        """The `### RELEVANT SKILLS` prompt section for a task, or None when
+        nothing scores above the relevance threshold (injection is opt-in
+        on real matches only — no context noise on unrelated tasks)."""
+        note = format_relevant_skills(self.match_skills(task_text))
+        return note or None
+
+    def get_skill_usage(self) -> dict[str, int]:
+        """Skill-name -> turns-matched count, for /stats-style surfaces."""
+        return dict(self._skill_usage)
+
+    async def _run_skills_lookup(self, raw_input: str) -> Turn:
+        """Answer a /skills slash command that reached the engine (the TUI
+        passes unknown slash commands to run()). Lists matched skills for
+        the given task — or a catalog summary without args — without an
+        LLM call."""
+        turn = Turn(user_message=raw_input)
+        parts = raw_input.strip().split(maxsplit=1)
+        args = parts[1].strip() if len(parts) > 1 else ""
+        if args:
+            matches = self.match_skills(args)
+            if matches:
+                lines = [f"⚡ {len(matches)} skills matched for “{args}”:"]
+                for m in matches:
+                    desc = " ".join(m.description.split())[:90]
+                    lines.append(f"  • {m.name} — {desc}")
+                lines.append("Load one with /skill <name>.")
+            else:
+                lines = [f"No bundled skills matched “{args}”."]
+        else:
+            try:
+                matcher = get_skill_matcher()
+                count = matcher.skill_count or matcher.build_index()
+                cats = ", ".join(matcher.categories()[:12])
+                lines = [
+                    f"{count} bundled skills available.",
+                    f"Categories: {cats}…",
+                    "Match skills for a task with /skills <task>.",
+                ]
+            except Exception:
+                lines = ["Skill catalog unavailable."]
+        turn.assistant_message = "\n".join(lines)
+        self._history.append(turn)
+        return turn
 
     async def _build_memory_context(self, user_input: str) -> str | None:
         """Assemble a compact memory-recall note for this turn: relevant

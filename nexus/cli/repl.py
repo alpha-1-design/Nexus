@@ -110,6 +110,9 @@ class REPL:
         self._nexus_md_cache: str | None = None
         self._nexus_md_loaded = False
 
+        # Skill pre-loading: names matched this session (for /stats).
+        self._skills_used: list[str] = []
+
     async def _ensure_provider(self) -> None:
         """Ensure a working provider is configured. Auto-setup OpenCode Zen if needed."""
         try:
@@ -549,8 +552,25 @@ When using tools, always provide clear feedback about what you're doing.
             if spawned:
                 self._show_neural_branching(spawned)
 
+        # Skill pre-loading (before the first LLM call of the turn): match
+        # bundled skills for this task, show one dim line, and inject the
+        # compact RELEVANT SKILLS section at the system-prompt seam below —
+        # once per turn, never per ReAct round.
+        skill_matches = self._match_skills(user_input)
+        if skill_matches:
+            print(f"  \033[90m⚡ skills: {', '.join(m.name for m in skill_matches)}\033[0m")
+            for name in (m.name for m in skill_matches):
+                if name not in self._skills_used:
+                    self._skills_used.append(name)
+
         tools = self.registry.to_openai_format()
         system_prompt = self._get_system_prompt()
+        if skill_matches:
+            from ..skills.matcher import format_relevant_skills
+
+            section = format_relevant_skills(skill_matches)
+            if section:
+                system_prompt = f"{system_prompt}\n\n{section}"
 
         self._abort_requested = False
         self._task_running = True
@@ -791,7 +811,7 @@ When using tools, always provide clear feedback about what you're doing.
                 ("/sync", "Sync status/push/pull"),
                 ("/learn", "Learning system stats"),
                 ("/improve", "Self-improvement"),
-                ("/skills", "List available skills"),
+                ("/skills [task]", "List skills / match for a task"),
                 ("/skill <name>", "Activate a skill"),
                 ("/providers", "List configured providers"),
                 ("/models", "List available models"),
@@ -1011,6 +1031,19 @@ When using tools, always provide clear feedback about what you're doing.
             return True
 
         elif cmd == "skills":
+            if args:
+                # Matcher mode: which bundled skills fit this task text?
+                matches = self._match_skills(args)
+                if matches:
+                    print(f"\n  \033[36m⚡ {len(matches)} skills matched for '{args}':\033[0m")
+                    for m in matches:
+                        desc = " ".join(m.description.split())[:90]
+                        print(f"    \033[92m●\033[0m {m.name} \033[90m(score {m.score:g})\033[0m — {desc}")
+                    print(f"  \033[90mLoad one with /skill <name>.\033[0m")
+                else:
+                    print(f"No bundled skills matched '{args}'.")
+                return True
+
             from ..skills import SkillsManager
 
             sm = SkillsManager()
@@ -1058,6 +1091,8 @@ When using tools, always provide clear feedback about what you're doing.
             print(f"  Messages: {len(self.messages)}")
             print(f"  Tool calls: {self._tool_call_count}")
             print(f"  Active agents: {len(self.team.list_agents()) if self.team else 0}")
+            if self._skills_used:
+                print(f"  Skills used: {', '.join(self._skills_used)}")
             return True
 
         elif cmd == "retry":
@@ -1405,6 +1440,46 @@ When using tools, always provide clear feedback about what you're doing.
         tracker.finish()
         self._plan_active = False
 
+    def _get_provider_badge_line(self) -> str | None:
+        """Provider-branded badge line for the REPL banner (Feature A).
+
+        Same brand-color map the TUI welcome card uses, as ANSI truecolor.
+        Returns None when no provider is configured (keep the neutral art).
+        """
+        try:
+            if not getattr(self.manager, "configs", None):
+                return None
+            from ..tui.colors import (
+                ANSI_RESET,
+                format_provider_badge,
+                get_provider_brand_color,
+                hex_to_ansi24,
+            )
+
+            provider = self.manager.active_provider or ""
+            if not provider:
+                return None
+            cfg = self.manager.get_provider_config(provider)
+            model = cfg.model if cfg else ""
+            color = hex_to_ansi24(get_provider_brand_color(provider))
+            if not color:
+                return None
+            return f"  {color}{format_provider_badge(provider, model)}{ANSI_RESET}"
+        except Exception:
+            return None
+
+    def _match_skills(self, task_text: str) -> list:
+        """Match bundled skills for a task via the shared keyword matcher.
+
+        Never raises: a broken skills install must not break the loop.
+        """
+        try:
+            from ..skills.matcher import get_skill_matcher
+
+            return get_skill_matcher().match(task_text)
+        except Exception:
+            return []
+
     def _get_prompt(self) -> str:
         """Return the current REPL prompt."""
         from ..providers import get_manager
@@ -1425,6 +1500,12 @@ When using tools, always provide clear feedback about what you're doing.
         # loaded -> it will be injected from the first turn onward.
         if not self._nexus_md_loaded and self._get_nexus_md_context():
             print("\033[90m  ▸ Project context loaded from NEXUS.md (run /init to regenerate)\033[0m")
+
+        # Provider-aware identity: badge under the boot art in the provider's
+        # brand color, matching the TUI welcome card (none when unconfigured).
+        badge = self._get_provider_badge_line()
+        if badge:
+            print(badge)
 
         while self.running:
             try:

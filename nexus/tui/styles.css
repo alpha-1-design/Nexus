@@ -139,6 +139,11 @@ DiffBlock {
     margin: 1 0 0 1;
 }
 
+.welcome-badge {
+    height: 1;
+    margin: 0 0 0 2;
+}
+
 .welcome-sub {
     height: 1;
     margin: 0 0 1 2;

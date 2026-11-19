@@ -155,3 +155,11 @@ def _register_core_tools(registry: ToolRegistry) -> None:
         termux_registry.register_termux_tools(registry)
     except Exception:
         pass
+    try:
+        # Adapters for installed MCP servers (lazy: config file read only,
+        # servers start on first tool use). Must never block core tools.
+        from ..mcp import register_mcp_tools
+
+        register_mcp_tools(registry)
+    except Exception:
+        pass

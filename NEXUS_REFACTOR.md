@@ -50,3 +50,13 @@ Five subsystems rebuilt/fixed in parallel; **288 tests passing** (baseline 175).
 
 Remaining known debt (see NEXUS_RECON_FINDINGS.md M3–M6): MCP handshake swapped-args bug + adapter never registered, safety rules never match commands, GitTool shell=True injection, bash sandbox no-op, "semantic recall" still keyword LIKE, ~1,500 lines dead code (orchestrator/, circuit_breaker, voice stub), dashboard unauthenticated write route.
 
+## 2026-11-19 Session 2 — M3 Strike + Identity/Skills Round
+
+**365 tests passing** (up from 288).
+
+1. **M3 — MCP now actually works:** the 3 swapped `run_in_executor` args fixed (proper id-matched responses, JSON-RPC errors surfaced, `isError` mapped to failed ToolResult, request timeouts via `NEXUS_MCP_TIMEOUT`, stderr drained, dead servers reaped). `MCPAdapterTool` registration wired: `tools/base.py` `_register_core_tools` lazily calls `register_mcp_tools(registry)` per `~/.nexus/mcp-servers.json` — one adapter per server, lazy connect on first call, graceful per-server failure. 26 hermetic tests with REAL stdio JSON-RPC subprocesses (good/garbage/hung/dying servers).
+2. **Provider identity:** `PROVIDER_BRAND_COLORS` map (14 providers + aliases); TUI welcome logo + `⬢ provider · model` badge, status bar `● provider` and REPL boot badge tint with the connected provider's brand color; neutral cyan when none.
+3. **Skill pre-loading:** new `nexus/skills/matcher.py` — token-overlap scorer over the 382-skill catalog (~24ms cold, <0.1ms warm, threshold-gated top-3). Orchestrator + REPL inject a capped `### RELEVANT SKILLS` section before the first LLM call of a turn; TUI shows `⚡ N skills loaded: …`, REPL prints a dim skills line, `/skills <task>` command + autocomplete added, usage recorded (`Turn.skills_loaded`, `get_skill_usage()`).
+4. Pending follow-ups: `commands.py` should use `collect_server_status` for `nexus mcp list`; `welcome.py get_logo()` still hardcoded cyan; `nexus skills match` CLI subcommand; SSE transport only does initialize; dashboard provider tint skipped.
+
+

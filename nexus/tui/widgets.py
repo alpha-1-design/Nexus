@@ -18,7 +18,12 @@ from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import Input, Static
 
-from .colors import CSS_COLORS
+from .colors import (
+    CSS_COLORS,
+    DEFAULT_BRAND_COLOR,
+    format_provider_badge,
+    get_provider_brand_color,
+)
 from .state import (
     AgentInfo,
     AgentStatus,
@@ -416,11 +421,23 @@ class DiffMessageWidget(Container):
 
 
 class WelcomeCard(Container):
-    """Boot-time session card: ASCII logo, version, quick tips."""
+    """Boot-time session card: ASCII logo, provider badge, version, tips.
 
-    def __init__(self, version: str = "0.1.0", **kwargs):
+    Provider-aware identity: the logo tints with the connected provider's
+    brand color (neutral cyan when none), with a `⬢ groq · llama-3.3-70b`
+    badge underneath in the same color.
+    """
+
+    def __init__(self, version: str = "0.1.0", provider: str = "", model: str = "", **kwargs):
         super().__init__(**kwargs)
         self.version = version
+        if not provider:
+            # Auto-detect from the provider manager (same source the status
+            # bar uses) so callers don't have to plumb it through.
+            provider, model = _detect_active_provider()
+        self.provider = provider
+        self.model = model
+        self.brand_color, self.badge = resolve_welcome_identity(provider, model)
 
     def compose(self) -> ComposeResult:
         logo = r"""
@@ -430,7 +447,12 @@ class WelcomeCard(Container):
   ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║
   ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║
   ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝"""
-        yield Static(f"[bold {CSS_COLORS['accent']}]{logo}[/]", classes="welcome-logo")
+        yield Static(f"[bold {self.brand_color}]{logo}[/]", classes="welcome-logo")
+        if self.badge:
+            yield Static(
+                f"[bold {self.brand_color}]{escape(self.badge)}[/]",
+                classes="welcome-badge",
+            )
         yield Static(
             f"[dim]v{self.version} · self-hosted neural coding agent[/]",
             classes="welcome-sub",
@@ -446,6 +468,34 @@ class WelcomeCard(Container):
             ),
             classes="welcome-tips",
         )
+
+
+def _detect_active_provider() -> tuple[str, str]:
+    """(provider, model) for the configured provider, same source as the
+    status bar; ("", "") when nothing is configured."""
+    try:
+        from ..providers import get_manager
+
+        manager = get_manager()
+        if getattr(manager, "configs", None):
+            provider = manager.active_provider or ""
+            config = manager.get_provider_config(provider)
+            return provider, (config.model if config else "")
+    except Exception:
+        pass
+    return "", ""
+
+
+def resolve_welcome_identity(provider: str = "", model: str = "") -> tuple[str, str | None]:
+    """Pure selection logic for the welcome card's provider-aware identity.
+
+    Returns (brand_color_hex, badge_text_or_None). No provider configured
+    (or an unknown name) keeps the neutral cyan look with no badge, which is
+    also the unit-tested seam — no pixel rendering involved.
+    """
+    if not provider:
+        return DEFAULT_BRAND_COLOR, None
+    return get_provider_brand_color(provider), format_provider_badge(provider, model)
 
 
 # --- side panels --------------------------------------------------------------
@@ -830,6 +880,7 @@ class SlashCommandDropdown(Container):
 
     COMMANDS: list[tuple[str, str]] = [
         ("/help", "Show help"),
+        ("/skills", "Match bundled skills for a task"),
         ("/init", "Scan this project and generate NEXUS.md context"),
         ("/clear", "Clear chat history"),
         ("/history", "Show command history"),
@@ -998,12 +1049,18 @@ class StatusBar(Static):
         pulse_color = CSS_COLORS["accent"] if state.is_busy else CSS_COLORS["text_dim"]
 
         parts = [f"[{pulse_color}]{pulse}[/] [dim]nexus[/]"]
-        # model • provider, graceful "no provider" state
+        # model • provider, graceful "no provider" state. When a provider is
+        # configured, its NAME renders in the provider's brand color with a
+        # matching dot — the identity follows the connected brain.
         if self.model:
             parts.append(f"[bold]{self.model}[/]")
         else:
             parts.append("[dim]no model[/]")
-        parts.append(f"[dim]{self.provider or 'no provider'}[/]")
+        if self.provider:
+            brand = get_provider_brand_color(self.provider)
+            parts.append(f"[{brand}]●[/] [{brand}]{escape(self.provider)}[/]")
+        else:
+            parts.append("[dim]no provider[/]")
 
         # context-used %
         if state.max_context_tokens > 0 and state.context_tokens > 0:
