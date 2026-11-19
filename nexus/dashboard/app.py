@@ -151,6 +151,31 @@ def api_vitals():
     return jsonify(_vitals())
 
 
+# ── agent-intelligence stats ─────────────────────────────────
+
+@app.route("/api/stats")
+@_api
+def api_stats(api):
+    """Skill usage / memory counts / provider identity for the stats strip.
+
+    GET → open in standard (local-first) token mode, token-gated in strict
+    mode like every other /api route (handled by the before_request hook).
+    Subsystem failures are reported as null sections by the API layer.
+    """
+    return jsonify(api.get_stats())
+
+
+@app.route("/api/context")
+@_api
+def api_context(api):
+    """Estimated context-window fill of this dashboard's chat conversation.
+
+    Available only after the orchestrator has been created by the first
+    chat turn; returns available:false before that.
+    """
+    return jsonify(api.get_context_usage())
+
+
 # ── providers ────────────────────────────────────────────────
 
 @app.route("/api/providers", methods=["GET", "POST", "DELETE"])

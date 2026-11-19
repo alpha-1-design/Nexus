@@ -302,6 +302,32 @@ input, select, textarea { font-family: inherit; }
   color: var(--text-muted);
 }
 
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+/* — agent-intelligence stats strip — */
+
+.stats-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.stat {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+  cursor: default;
+}
+
 .status-pill .dot {
   width: 7px;
   height: 7px;
@@ -519,7 +545,53 @@ input, select, textarea { font-family: inherit; }
   margin-top: 8px;
   font-size: 11.5px;
   color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
 }
+
+/* — context-usage chip — */
+
+.ctx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-soft);
+  border-radius: 20px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+/* the hidden attribute must win over the display above, or the chip
+   would render before the first chat turn (no orchestrator yet) */
+.ctx-chip[hidden] { display: none; }
+
+.ctx-bar {
+  width: 42px;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.ctx-bar-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--success);
+  transition: width 0.3s ease;
+}
+
+.ctx-chip.warn .ctx-bar-fill { background: var(--warning); }
+.ctx-chip.hot .ctx-bar-fill { background: var(--danger); }
+.ctx-chip.warn { color: var(--warning); }
+.ctx-chip.hot { color: var(--danger); }
 
 /* ═══════════ PANEL VIEWS ═══════════ */
 

@@ -58,10 +58,38 @@ def get_browser_manager() -> BrowserManager:
 
 try:
     from playwright.async_api import Browser, Page, async_playwright
+except ImportError:  # playwright not installed — availability is gated by playwright_available()
+    Browser = Page = async_playwright = None  # type: ignore[assignment, misc]
 
-    PLAYWRIGHT_AVAILABLE = True
-except ImportError:
-    PLAYWRIGHT_AVAILABLE = False
+
+def playwright_available(offer_install: bool = True) -> bool:
+    """Playwright availability probe — nexus.discovery.ensure_dependency-style.
+
+    Skip-if-present (find_spec only, no import side effects). When missing,
+    offer an install through nexus.discovery (same flow as /voice and the
+    automation tools). Pass ``offer_install=False`` for pure availability
+    checks (status output, availability gates) that must not prompt.
+
+    discovery is imported lazily inside this function: nexus.discovery sits
+    on the boot path (boot_summary -> tools registry) and tools import
+    automation, so a module-level import would create a cycle.
+    """
+    try:
+        from ..discovery import _module_available, ensure_dependency
+
+        if _module_available("playwright"):
+            return True
+        if not offer_install:
+            return False
+        return bool(ensure_dependency("playwright"))
+    except Exception:
+        # Discovery broken/absent: fall back to a bare find_spec probe.
+        try:
+            import importlib.util
+
+            return importlib.util.find_spec("playwright") is not None
+        except Exception:
+            return False
 
 
 @dataclass
@@ -136,8 +164,8 @@ STEALTH_SCRIPTS = [
 
 
 def is_browser_available() -> bool:
-    """Check if Playwright and a browser are available."""
-    if not PLAYWRIGHT_AVAILABLE:
+    """Check if Playwright and a browser are available (never prompts)."""
+    if not playwright_available(offer_install=False):
         return False
     try:
         import os
@@ -169,7 +197,10 @@ class BrowserAutomation:
     """Browser automation using Playwright with anti-detection."""
 
     def __init__(self, config: BrowserConfig | None = None):
-        if not PLAYWRIGHT_AVAILABLE:
+        # offer_install=False: constructing from an agent tool call must
+        # never block on an interactive install prompt — the offer lives in
+        # `nexus automation install-browser` and the automation tools.
+        if not playwright_available(offer_install=False):
             raise ImportError("Playwright not installed. Run: pip install playwright && playwright install chromium")
 
         self.config = config or BrowserConfig()

@@ -793,6 +793,35 @@ class NexusTUI(App):
             ))
             return True
 
+        if cmd == "plugins":
+            # Drop-in tool-plugin cards — same renderer the REPL prints.
+            try:
+                from ..cli.repl import format_plugins_report
+                from ..plugins import list_plugins, reload_plugins
+
+                records = (
+                    reload_plugins()
+                    if "--reload" in args.lower().split()
+                    else list_plugins()
+                )
+                system_msg(format_plugins_report(records))
+            except Exception as e:
+                system_msg(f"/plugins failed: {e}")
+            return True
+
+        if cmd == "discover":
+            # Environment + project sniff card — same renderer as the REPL.
+            try:
+                from ..cli.repl import format_discover_report
+                from ..discovery import discover_environment, familiarize_project
+
+                system_msg(
+                    format_discover_report(discover_environment(), familiarize_project())
+                )
+            except Exception as e:
+                system_msg(f"/discover failed: {e}")
+            return True
+
         if cmd == "mcp":
             system_msg("MCP: use /mcp list|add|remove")
             return True

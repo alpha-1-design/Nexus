@@ -982,6 +982,32 @@ def doctor(ctx: click.Context) -> None:
     except Exception as e:
         click.echo(f"  [!] Voice system error: {e}")
 
+    # Environment snapshot (platform, python, missing capabilities)
+    try:
+        from ..discovery import discover_environment
+
+        profile = discover_environment()
+        click.echo("\n[*] Environment:")
+        detail = f" ({profile.platform_detail})" if profile.platform_detail else ""
+        click.echo(f"  [+] Platform: {profile.platform}{detail}")
+        click.echo(f"  [+] Python: {profile.python_version}")
+        missing_caps = profile.missing_capabilities()
+        if missing_caps:
+            shown = ", ".join(missing_caps[:5])
+            more = f" (+{len(missing_caps) - 5} more)" if len(missing_caps) > 5 else ""
+            click.echo(f"  [!] Missing optional capabilities: {shown}{more}")
+        else:
+            click.echo("  [+] All optional capabilities present")
+        missing_tools = profile.missing_tools()
+        if missing_tools:
+            click.echo(f"  [!] Missing PATH tools: {', '.join(missing_tools)}")
+        if profile.stale:
+            click.echo("  [!] Environment cache is stale (last scan failed) — delete ~/.nexus/environment.json to force a rescan")
+        else:
+            click.echo("  [i] Snapshot: ~/.nexus/environment.json (refreshed every 24h; delete it to force a rescan)")
+    except Exception as e:
+        click.echo(f"  [!] Environment discovery error: {e}")
+
     if issues:
         click.echo(f"\n[!] {len(issues)} issue(s) found:")
         for issue in issues:
@@ -1201,14 +1227,16 @@ def automation():
 def automation_status() -> None:
     """Check automation system status."""
     from ..automation import is_browser_available
-    from ..automation.browser import PLAYWRIGHT_AVAILABLE
+    from ..automation.browser import playwright_available
+
+    playwright_ok = playwright_available(offer_install=False)
 
     click.echo("\nAutomation Status:\n")
 
-    click.echo(f"  Playwright:     {'[+] installed' if PLAYWRIGHT_AVAILABLE else '[-] not installed'}")
+    click.echo(f"  Playwright:     {'[+] installed' if playwright_ok else '[-] not installed'}")
     click.echo(f"  Chromium:       {'[+] available' if is_browser_available() else '[-] not installed (run: nexus automation install-browser)'}")
 
-    if PLAYWRIGHT_AVAILABLE:
+    if playwright_ok:
         click.echo("\n  Browser:        Configured for stealth/anti-detection")
         click.echo("  User-Agent:     Randomized rotation enabled")
         click.echo("  CAPTCHA detect: Built-in (recaptcha, hcaptcha, cloudflare)")
@@ -1224,9 +1252,10 @@ def automation_status() -> None:
 @click.option("--with-deps", is_flag=True, default=False, help="Install system dependencies")
 def automation_install_browser(browser: str, with_deps: bool) -> None:
     """Install browser for automation. Run this once on a new machine."""
-    from ..automation.browser import PLAYWRIGHT_AVAILABLE
+    from ..automation.browser import playwright_available
 
-    if not PLAYWRIGHT_AVAILABLE:
+    # Skip-if-present, offer-install-when-missing (discovery flow).
+    if not playwright_available():
         click.echo("Playwright not installed. Run: pip install playwright")
         return
 

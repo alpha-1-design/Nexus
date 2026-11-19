@@ -58,6 +58,7 @@ class Rule:
     blocked_extensions: list[str] = field(default_factory=list)
     blocked_paths: list[str] = field(default_factory=list)
     allowed_paths: list[str] = field(default_factory=list)
+    allowed_command_prefixes: list[str] = field(default_factory=list)
     require_confirmation: bool = True
     auto_fix: str | None = None
     examples: list[str] = field(default_factory=list)
@@ -77,16 +78,47 @@ class Rule:
           existed but were dead code.
         - ``blocked_paths`` / ``allowed_paths`` are case-insensitive substring
           checks against the same two fields.
+        - ``blocked_extensions`` is a case-insensitive suffix check: the rule
+          fires when the target path — or any whitespace-separated token of
+          the command (e.g. ``git add .env README.md``) — ends with one of
+          the blocked extensions. Used by ``check-gitignore`` to warn when a
+          file that usually holds secrets is written or staged.
+        - ``allowed_command_prefixes`` is a scope gate checked FIRST: when
+          the command starts with one of these prefixes the rule does not
+          apply at all. Used by ``no-hardcoded-secrets`` so plain
+          environment-variable management (``export X_TOKEN=...``,
+          ``unset NAME``, ``env VAR=... cmd``) is not blocked — the
+          trade-off is that a secret hidden later inside such a compound
+          command is not seen either.
         """
+        command = str(context.get("command") or "")
         texts = [
-            str(context.get("command") or ""),
+            command,
             str(context.get("path") or ""),
         ]
+
+        # Command-prefix scope gate (decides whether the rule applies to
+        # this command at all — checked before any blocking check).
+        if self.allowed_command_prefixes:
+            stripped = command.strip().lower()
+            if any(stripped.startswith(prefix.lower()) for prefix in self.allowed_command_prefixes):
+                return False
 
         # Check blocked paths
         if self.blocked_paths:
             for blocked in self.blocked_paths:
                 if any(blocked.lower() in text.lower() for text in texts if text):
+                    return True
+
+        # Check blocked extensions (suffix match on the path, or on any
+        # whitespace-separated token of the command)
+        if self.blocked_extensions:
+            exts = tuple(e.lower() for e in self.blocked_extensions)
+            for text in texts:
+                if not text:
+                    continue
+                lowered = text.lower()
+                if lowered.endswith(exts) or any(token.lower().endswith(exts) for token in text.split()):
                     return True
 
         # Check allowed paths (if set, only these are allowed)
@@ -156,14 +188,24 @@ class SafetyEngine:
             category=RuleCategory.SECURITY,
             level=RuleLevel.BLOCK,
             pattern=r"(api[_-]?key|secret|token|password|credential)\s*=\s*['\"]?[a-zA-Z0-9_\-]{8,}",
+            # Environment-variable MANAGEMENT is not a hardcoded secret: the
+            # value being assigned comes from the user's own shell session,
+            # and `export`/`unset`/`env` are exactly how keys get INTO the
+            # env this rule wants people to use. Commands starting with these
+            # prefixes skip the rule; a secret inside e.g.
+            # `curl -H "Authorization: TOKEN=..."` still blocks.
+            allowed_command_prefixes=["export ", "unset ", "env "],
             require_confirmation=False,
         ),
         Rule(
             id="check-gitignore",
             name="Check .gitignore",
-            description="Warn before adding sensitive files to git",
+            description="Warn when a target path has a secret-bearing extension (.env/.pem/.key/...) — make sure it is gitignored before writing or staging it",
             category=RuleCategory.SECURITY,
             level=RuleLevel.WARN,
+            # Semantics: Rule.matches fires when the target path (or a
+            # command token like `git add .env`) ends with one of these
+            # extensions — see Rule.matches blocked_extensions.
             blocked_extensions=[".env", ".pem", ".key", ".p12", ".pfx"],
             require_confirmation=True,
         ),

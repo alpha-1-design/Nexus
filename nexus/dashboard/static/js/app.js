@@ -248,6 +248,11 @@
       state.streaming = false;
       setStatus("online");
       setSendEnabled();
+      // A turn may have loaded skills and consumed context — refresh the
+      // stats strip and the ctx chip right away instead of waiting for
+      // the 60s timer.
+      refreshStats();
+      refreshContext();
     }
   }
 
@@ -332,6 +337,76 @@
       });
     } catch {
       /* non-fatal: sessions API may not be wired to a persistence backend yet */
+    }
+  }
+
+  // ═══════════ AGENT-INTELLIGENCE STATS / CONTEXT ═══════════
+
+  function setStat(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  }
+
+  /** Stats strip: ⚡ skills · ⚙ provider · 🧠 facts · 💬 sessions.
+   * Any section the backend reports as null (subsystem unavailable)
+   * renders as a "—" placeholder instead of breaking the strip. */
+  async function refreshStats() {
+    try {
+      const res = await apiFetch("/api/stats");
+      if (!res.ok) return;
+      const data = await res.json();
+
+      const top = Array.isArray(data.top_skills) ? data.top_skills : [];
+      const skillsEl = $("#stat-skills");
+      if (top.length) {
+        skillsEl.textContent = `⚡ ${top.slice(0, 2).map((s) => `${s.name} ×${s.count}`).join(", ")}`;
+        skillsEl.title =
+          `Top skills: ${top.map((s) => `${s.name} (${s.count})`).join(", ")}` +
+          (data.total_skill_loads != null ? ` · ${data.total_skill_loads} total loads` : "");
+      } else {
+        skillsEl.textContent = "⚡ —";
+        skillsEl.title = data.total_skill_loads === 0 ? "No skills loaded yet" : "";
+      }
+
+      const p = data.provider || {};
+      const provEl = $("#stat-provider");
+      provEl.textContent = p.name ? `⚙ ${p.name}` : "⚙ —";
+      provEl.title = p.model ? `Model: ${p.model}` : "";
+
+      const mem = data.memory || {};
+      setStat("stat-facts", mem.facts != null ? `🧠 ${mem.facts} facts` : "🧠 —");
+      setStat("stat-sessions", mem.sessions != null ? `💬 ${mem.sessions} sessions` : "💬 —");
+    } catch {
+      /* non-fatal: stats strip stays on its last known values */
+    }
+  }
+
+  /** Context chip near the composer: thin bar + `ctx 42%`. Hidden until
+   * the orchestrator exists (i.e. before the first chat turn). */
+  async function refreshContext() {
+    const chip = $("#ctx-chip");
+    if (!chip) return;
+    try {
+      const res = await apiFetch("/api/context");
+      if (!res.ok) {
+        chip.hidden = true;
+        return;
+      }
+      const data = await res.json();
+      if (!data.available || data.ratio == null) {
+        chip.hidden = true;
+        return;
+      }
+      const pct = Math.round((data.ratio || 0) * 100);
+      chip.hidden = false;
+      chip.className = `ctx-chip${pct >= 85 ? " hot" : pct >= 60 ? " warn" : ""}`;
+      $("#ctx-chip-label").textContent = `ctx ${pct}%`;
+      $("#ctx-bar-fill").style.width = `${Math.min(100, pct)}%`;
+      chip.title = data.tokens != null && data.window != null
+        ? `~${data.tokens.toLocaleString()} / ${data.window.toLocaleString()} tokens · ${data.messages} messages`
+        : "";
+    } catch {
+      chip.hidden = true;
     }
   }
 
@@ -581,8 +656,12 @@
     refreshStatus();
     refreshVitals();
     refreshSessions();
+    refreshStats();
+    refreshContext();
 
     setInterval(refreshStatus, 15000);
     setInterval(refreshVitals, 10000);
+    setInterval(refreshStats, 60000);
+    setInterval(refreshContext, 60000);
   });
 })();

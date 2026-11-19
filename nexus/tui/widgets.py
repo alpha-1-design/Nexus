@@ -1247,6 +1247,8 @@ class SlashCommandDropdown(Container):
         ("/sync", "Sync status"),
         ("/learn", "Learning stats"),
         ("/improve", "Self-improvement"),
+        ("/plugins", "Tool plugin cards (--reload rescans)"),
+        ("/discover", "Environment + project sniff"),
         ("/exit", "Exit Nexus"),
     ]
 
@@ -1416,6 +1418,12 @@ class StatusBar(Static):
         self.set_interval(0.5, self._pulse)
 
     def _pulse(self):
+        # The status-bar heartbeat: a live pulse glyph on a cheap 0.5s
+        # set_interval. Honors the sidebar_animations setting — with
+        # animations off the dot stays solid and skips the per-tick
+        # refresh tax on phones.
+        if not get_settings().sidebar_animations:
+            return
         self._pulse_state = (self._pulse_state + 1) % 4
         self.refresh()
 

@@ -14,6 +14,7 @@ from nexus.config import (
     load_config,
     load_env,
     parse_env_text,
+    save_config,
     write_env_key,
 )
 
@@ -256,3 +257,42 @@ class TestConfigKeyFlow:
             {"providers": {"groq": {"name": "groq", "provider_type": "groq", "future_field": 1}}}
         )
         assert cfg.providers["groq"].provider_type == "groq"
+
+    def test_dashboard_auth_defaults_to_token_and_round_trips(self, tmp_path, monkeypatch):
+        _isolate_global_env(tmp_path, monkeypatch)
+        config_path = tmp_path / "config.json"
+
+        cfg = load_config(config_path)
+        assert cfg.dashboard_auth == "token"  # default
+
+        cfg.dashboard_auth = "strict"
+        save_config(cfg, config_path)
+
+        reloaded = load_config(config_path)
+        assert reloaded.dashboard_auth == "strict"
+        data = json.loads(config_path.read_text())
+        assert data["dashboard_auth"] == "strict"  # persisted for dashboard/auth.py
+
+    def test_dashboard_auth_hand_edited_json_is_read(self, tmp_path, monkeypatch):
+        """dashboard/auth.py used to need a raw-JSON fallback for this key;
+        now the dataclass models it, and a hand-edited config.json still wins."""
+        _isolate_global_env(tmp_path, monkeypatch)
+        config_path = tmp_path / "config.json"
+        config_path.write_text(json.dumps({"dashboard_auth": "strict"}))
+
+        cfg = load_config(config_path)
+        assert cfg.dashboard_auth == "strict"
+
+    def test_load_config_resolves_home_at_call_time(self, tmp_path, monkeypatch):
+        """dashboard/auth.py resolves ~/.nexus at CALL time; load_config must
+        agree. Its import-time DEFAULT_CONFIG_FILE snapshot went stale under
+        HOME isolation, which made the modeled dashboard_auth field shadow the
+        raw config.json fallback (strict-mode-via-config-file broke)."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        nexus_home = tmp_path / ".nexus"
+        nexus_home.mkdir()
+        (nexus_home / "config.json").write_text(json.dumps({"dashboard_auth": "strict"}))
+
+        cfg = load_config()  # no explicit path → resolve from (patched) HOME
+
+        assert cfg.dashboard_auth == "strict"

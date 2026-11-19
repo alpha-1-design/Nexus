@@ -187,7 +187,11 @@ class AgentOrchestrator:
         self.tools = tool_registry
         self.memory = memory
         self.config = config or AgentConfig()
-        self.reflection_engine = ReflectionEngine(Path("./.nexus/sessions"))
+        # Run reflection journal — one JSON line per completed run, stored
+        # next to the structured sessions (or ./.nexus/sessions when no
+        # memory layer is configured).
+        reflection_dir = self.memory.sessions_dir if self.memory is not None else Path("./.nexus/sessions")
+        self.reflection_engine = ReflectionEngine(reflection_dir)
 
         # ... rest of init ...
         self._tool_call_count = 0
@@ -460,6 +464,9 @@ class AgentOrchestrator:
         turn.duration_ms = int((time.monotonic() - start) * 1000)
         self._history.append(turn)
         await self._persist_turn(turn)
+        # Best-effort run reflection (never raises): append the outcome
+        # metrics for this completed run to the reflections journal.
+        self.reflection_engine.perform_reflection(turn)
         return turn
 
     def _get_vector_memory(self):

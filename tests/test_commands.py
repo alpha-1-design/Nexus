@@ -190,3 +190,39 @@ class TestTeamCommand:
         from nexus.cli.commands import cli
         result = runner.invoke(cli, ["team", "test task", "--members", "2"])
         assert result.exit_code == 0
+
+
+# =============================================================================
+# Doctor — Environment section (discovery-backed)
+# =============================================================================
+
+
+class TestDoctorEnvironmentSection:
+    def test_doctor_reports_environment_block(self, runner, tmp_path, monkeypatch):
+        """`nexus doctor` includes the discovery-backed Environment block."""
+        monkeypatch.setenv("NEXUS_ENVIRONMENT_CACHE", str(tmp_path / "environment.json"))
+        from nexus.cli.commands import cli
+
+        result = runner.invoke(cli, ["doctor"])
+        assert result.exit_code == 0
+        assert "[*] Environment:" in result.output
+        assert "Platform:" in result.output
+        assert "Python:" in result.output
+        # The stale-cache note is part of the block (fresh scan here).
+        assert "environment.json" in result.output
+
+    def test_doctor_survives_discovery_failure(self, runner, tmp_path, monkeypatch):
+        """A broken discovery must degrade to one warning line, not crash."""
+        import nexus.cli.commands as cmds
+
+        monkeypatch.setenv("NEXUS_ENVIRONMENT_CACHE", str(tmp_path / "environment.json"))
+
+        def boom(force: bool = False):
+            raise RuntimeError("discovery offline")
+
+        monkeypatch.setattr("nexus.discovery.discover_environment", boom)
+        from nexus.cli.commands import cli
+
+        result = runner.invoke(cli, ["doctor"])
+        assert result.exit_code == 0
+        assert "Environment discovery error" in result.output

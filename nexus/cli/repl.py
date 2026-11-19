@@ -31,6 +31,7 @@ from ..sessions import get_session_loader
 from ..sync import get_sync_engine
 from ..thinking import ThinkingState, get_thinking_engine
 from ..tools import ToolResult
+from ..tools.core import BashTool
 from ..ui import ProgressTracker
 from ..utils.validation import get_tool_failure_hint, run_refiners_fire
 from ..voice import get_voice_engine
@@ -50,6 +51,114 @@ def _style(text: str, fg: str = "", bold: bool = False) -> str:
     code = colors.get(fg, "")
     b = "\033[1m" if bold else ""
     return f"{b}{code}{text}{reset}" if code or bold else text
+
+
+# ── /plugins + /discover card renderers (shared REPL + TUI) ──────────────
+# Plain text on purpose: the TUI transcript renders message content without
+# Rich markup parsing, and the REPL prints these verbatim.
+
+
+def format_plugins_report(records: list, plugins_dir: str | None = None) -> str:
+    """Compact plugin cards for the /plugins command.
+
+    Loaded plugins render ``● name vX — N tool(s)`` with the registered tool
+    names indented beneath; a broken drop-in is never silent — it gets its
+    own ``error:`` row (and any loader ``warnings`` are shown too).
+    """
+    if not records:
+        return f"No plugins found{f' in {plugins_dir}' if plugins_dir else ''}."
+    header = "Plugins"
+    if plugins_dir:
+        header += f" ({plugins_dir})"
+    lines = [f"{header} — {len(records)} found:"]
+    for rec in records:
+        if getattr(rec, "ok", False):
+            tools = list(getattr(rec, "tools", None) or [])
+            lines.append(f"  ● {rec.name} v{rec.version or '?'} — {len(tools)} tool(s)")
+            for tool_name in tools:
+                lines.append(f"      · {tool_name}")
+        else:
+            error = getattr(rec, "error", None) or "unknown error"
+            lines.append(f"  ✗ {rec.name} — error: {error}")
+        for warning in list(getattr(rec, "warnings", None) or []):
+            lines.append(f"      ⚠ {warning}")
+    return "\n".join(lines)
+
+
+def format_discover_report(profile: Any, project: dict) -> str:
+    """Environment + project sniff card for the /discover command.
+
+    Shows the discovered platform, python/shell, capability presence/absence
+    and PATH tools from an :class:`~nexus.discovery.EnvironmentProfile`, then
+    the light project sniff from :func:`~nexus.discovery.familiarize_project`.
+    """
+    lines = ["Environment:"]
+    detail = (getattr(profile, "platform_detail", "") or "").strip()
+    platform = getattr(profile, "platform", "unknown")
+    lines.append(f"  ● platform: {platform}" + (f" — {detail}" if detail else ""))
+    py_ver = getattr(profile, "python_version", "") or ""
+    if py_ver:
+        lines.append(f"  ● python {py_ver} · shell {getattr(profile, 'shell', '?')}")
+
+    capabilities = dict(getattr(profile, "capabilities", None) or {})
+    present = sorted(name for name, ok in capabilities.items() if ok)
+    missing = sorted(name for name, ok in capabilities.items() if not ok)
+    if present:
+        lines.append(f"  ● capabilities present: {', '.join(present)}")
+    if missing:
+        lines.append(f"  ✗ capabilities missing: {', '.join(missing)}")
+    if not capabilities:
+        lines.append("  ○ capabilities: none probed")
+
+    tools = dict(getattr(profile, "tools", None) or {})
+    tools_present = sorted(name for name, path in tools.items() if path)
+    tools_missing = sorted(name for name, path in tools.items() if not path)
+    if tools_present:
+        lines.append(f"  ● tools present: {', '.join(tools_present)}")
+    if tools_missing:
+        lines.append(f"  ✗ tools missing: {', '.join(tools_missing)}")
+
+    lines.append("Project:")
+    lines.append(f"  ● {project.get('path', '?')}")
+    languages = project.get("languages") or []
+    if languages:
+        lang_text = ", ".join(
+            f"{lang.get('language', '?')} ({lang.get('files', 0)} files)" for lang in languages
+        )
+        lines.append(f"  ● languages: {lang_text}")
+    else:
+        lines.append("  ○ languages: none detected")
+    nexus_md = "yes" if project.get("has_nexus_md") else "no"
+    git_bit = f" · git: {project.get('git_branch') or 'detached'}" if project.get("is_git") else ""
+    lines.append(f"  ● manifests: {project.get('manifest_count', 0)} · NEXUS.md: {nexus_md}{git_bit}")
+    return "\n".join(lines)
+
+
+class _ApprovedBash(BashTool):
+    """BashTool variant used ONLY for the REPL's explicit-approval re-run.
+
+    When BashTool flags a command as destructive it returns the
+    ``action=require_approval`` contract instead of executing. The REPL asks
+    the human ``run? [y/N]``; on "y" the exact same command is re-executed
+    once through this subclass with ``approved=True`` — the destructive
+    confirmation gate is skipped for that run because a human explicitly
+    approved it. The SafetyEngine denylist inside BashTool.execute still
+    runs, so hard-BLOCKed commands (fork bombs, mkfs, raw dd) can never be
+    rehabilitated by approval, and default behaviour is unchanged:
+    ``_ApprovedBash()`` without the flag applies the same destructive gate
+    as BashTool. Approval is opt-in, never automatic.
+    """
+
+    def __init__(self, approved: bool = False):
+        super().__init__()
+        self.approved = bool(approved)
+
+    def _match_destructive(self, command: str) -> str | None:
+        # The base implementation is a classmethod; this override needs the
+        # per-instance approval flag, hence a plain method.
+        if self.approved:
+            return None  # the human approved this exact command at the prompt
+        return super()._match_destructive(command)
 
 
 class REPL:
@@ -264,6 +373,7 @@ class REPL:
             "/skills", "/skill", "/providers", "/models",
             "/context", "/compact", "/stats", "/retry", "/undo", "/diff",
             "/status", "/phone", "/partner", "/help", "/init",
+            "/plugins", "/discover",
         ]
 
         def completer(text: str, state: int) -> str | None:
@@ -462,6 +572,19 @@ When using tools, always provide clear feedback about what you're doing.
                 self._show_kinetic_stream(tool_call.arguments.get("path", "file"))
 
             result = await tool.execute(**tool_call.arguments)
+
+            # Destructive-bash approval gate: BashTool answers destructive
+            # commands with the require_approval contract instead of running
+            # them. The REPL is the interactive surface, so it asks the
+            # human; on "y" the command re-executes once through the
+            # explicit-override path (_ApprovedBash), on anything else it
+            # stays blocked.
+            if (
+                tool_call.name == "bash"
+                and result.metadata
+                and result.metadata.get("action") == "require_approval"
+            ):
+                result = await self._confirm_destructive_bash(tool_call, result)
 
             if result.success and tool_call.name in ("write", "edit"):
                 validation_passed, validation_error = await self._run_refiners_fire(
@@ -911,6 +1034,49 @@ When using tools, always provide clear feedback about what you're doing.
         """Perform automatic diagnostics and recovery hints for tool failures."""
         return get_tool_failure_hint(tool_name, arguments, error)
 
+    def _ask_yes_no(self, prompt: str) -> bool:
+        """Read a y/N answer from the terminal.
+
+        Only "y"/"yes" approves; everything else (and EOF or Ctrl-C at the
+        prompt) declines — approval is never implicit.
+        """
+        try:
+            answer = input(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+        return answer in ("y", "yes")
+
+    async def _confirm_destructive_bash(self, tool_call, result: ToolResult) -> ToolResult:
+        """Interactive approval for BashTool's destructive commands.
+
+        BashTool returned ``action=require_approval`` instead of executing.
+        Show ``⚠ approval required: <reason> — run? [y/N]``; on "y" the same
+        command re-executes ONCE through _ApprovedBash(approved=True) — the
+        explicit override path (the destructive gate is skipped for that run
+        because the human just approved it; the denylist still applies). Any
+        other answer returns a failed ToolResult so the transcript commits a
+        tool message saying the command was declined.
+        """
+        meta = result.metadata or {}
+        reason = meta.get("approval_reason") or "irreversible operation"
+        command = meta.get("command") or str(tool_call.arguments.get("command", ""))
+        if self._ask_yes_no(f"⚠ approval required: {reason} — run? [y/N] "):
+            approved = _ApprovedBash(approved=True)
+            try:
+                return await approved.execute(**tool_call.arguments)
+            except Exception as exc:
+                return ToolResult(
+                    success=False,
+                    content="",
+                    error=f"approved command failed: {exc}",
+                )
+        return ToolResult(
+            success=False,
+            content=f"Command not run: {command}\nUser declined approval ({reason}).",
+            error=f"user declined approval: {reason}",
+        )
+
     async def _handle_command(self, line: str) -> bool:
         """Handle a slash command. Returns True if handled."""
         if not line.startswith("/"):
@@ -968,6 +1134,8 @@ When using tools, always provide clear feedback about what you're doing.
                 ("/reflect", "Session reflection"),
                 ("/mcp", "MCP server management"),
                 ("/plugin", "Plugin management"),
+                ("/plugins [--reload]", "Tool plugin cards (rescan)"),
+                ("/discover", "Environment + project sniff"),
             ]
             for cmd, desc in commands:
                 print(f"{cyan}  ║{reset}  {dim}{cmd:<20}{reset} {desc:<30} {cyan}║{reset}")
@@ -1420,6 +1588,23 @@ When using tools, always provide clear feedback about what you're doing.
                     print(f"Plugin not found: {subargs}")
             else:
                 print("Usage: /plugin list|enable <name>|disable <name>")
+            return True
+
+        elif cmd == "plugins":
+            # Drop-in tool-plugin cards (nexus.plugins.loader records) —
+            # distinct from /plugin, which drives the hook-plugin manager.
+            from ..plugins import default_plugins_dir, list_plugins, reload_plugins
+
+            records = reload_plugins() if "--reload" in args.lower().split() else list_plugins()
+            print(format_plugins_report(records, plugins_dir=str(default_plugins_dir())))
+            return True
+
+        elif cmd == "discover":
+            from ..discovery import discover_environment, familiarize_project
+
+            profile = discover_environment()
+            project = familiarize_project()
+            print(format_discover_report(profile, project))
             return True
 
         elif cmd == "doctor":

@@ -342,6 +342,104 @@ class NexusAPI:
             ]
         }
 
+    # ── agent-intelligence stats ─────────────────────────────
+
+    def get_stats(self) -> dict[str, Any]:
+        """Aggregate agent-intelligence stats for the dashboard stats strip.
+
+        Sources mirror the rest of this class: skill usage from the
+        orchestrator this dashboard process owns (tracked per turn via the
+        skill pre-loader), memory counts from the same ``get_memory()``
+        backend ``get_status``/``get_facts`` use, and provider identity
+        from the provider manager. Every subsystem is optional — if one
+        cannot be reached its section is ``null`` instead of raising, so
+        this endpoint never 500s and the UI renders a "—" placeholder.
+        """
+        stats: dict[str, Any] = {
+            "top_skills": None,
+            "total_skill_loads": None,
+            "memory": None,
+            "provider": None,
+            "agent": None,
+        }
+
+        # Skill usage: per-skill turn counts tracked by the orchestrator
+        # (null until at least one agent turn has run in this process).
+        try:
+            orch = self._orchestrator
+            if orch is not None:
+                usage = orch.get_skill_usage()
+                if usage:
+                    ranked = sorted(usage.items(), key=lambda kv: (-kv[1], kv[0]))
+                    stats["top_skills"] = [{"name": n, "count": c} for n, c in ranked[:5]]
+                stats["total_skill_loads"] = sum(usage.values())
+        except Exception:
+            pass
+
+        # Memory counts: same access pattern as get_status()/get_facts().
+        try:
+            memory = get_memory()
+            stats["memory"] = {
+                "facts": len(memory._facts),
+                "sessions": len(list(memory.sessions_dir.glob("*.json"))),
+            }
+        except Exception:
+            pass
+
+        # Provider identity: active provider name + its configured model.
+        try:
+            pm = self._get_pm()
+            name = pm.active_provider or None
+            model = None
+            if name:
+                cfg = pm.configs.get(name)
+                model = (cfg.model or None) if cfg is not None else None
+            stats["provider"] = {"name": name, "model": model}
+        except Exception:
+            pass
+
+        # Live agent counters (null until the orchestrator has run a turn).
+        try:
+            if self._orchestrator is not None:
+                stats["agent"] = {
+                    "turns": self._orchestrator.turn_count,
+                    "tool_calls": self._orchestrator.tool_call_count,
+                }
+        except Exception:
+            pass
+
+        return stats
+
+    def get_context_usage(self) -> dict[str, Any]:
+        """Estimated context-window fill of this dashboard's chat conversation.
+
+        The dashboard owns its orchestrator lazily via ``run_agent_task()``
+        (read-only handle — the orchestrator itself is not modified here),
+        so before the first chat turn there is nothing to measure: the
+        endpoint reports ``available: false`` with null values, which the
+        frontend renders as no ctx chip at all.
+        """
+        empty: dict[str, Any] = {
+            "available": False,
+            "ratio": None,
+            "tokens": None,
+            "window": None,
+            "messages": None,
+        }
+        if self._orchestrator is None:
+            return empty
+        try:
+            usage = self._orchestrator.context_usage()
+        except Exception:
+            return empty
+        return {
+            "available": True,
+            "ratio": usage.get("ratio"),
+            "tokens": usage.get("tokens"),
+            "window": usage.get("window"),
+            "messages": usage.get("messages"),
+        }
+
     def spawn_agent(self, task: str, role: str = "coder", name: str | None = None) -> dict[str, Any]:
         team = self._get_team()
         role_map = {r.value: r for r in AgentRole}

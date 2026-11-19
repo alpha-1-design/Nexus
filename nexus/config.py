@@ -78,6 +78,12 @@ class NexusConfig:
     # free provider with a key (see providers/manager.py).
     free_rotation: bool = True
 
+    # Dashboard auth mode: "token" (default — only writes/mutations need the
+    # X-Nexus-Token header) or "strict" (locks GET routes down too). Consumed
+    # by dashboard/auth.py, which also honours the NEXUS_DASHBOARD_AUTH env
+    # var override.
+    dashboard_auth: str = "token"
+
     # Search providers
     search_provider: str = "exa"
     tavily_api_key: str | None = None
@@ -118,6 +124,7 @@ class NexusConfig:
             "sandbox_mode": self.sandbox_mode,
             "tool_profile": self.tool_profile,
             "free_rotation": self.free_rotation,
+            "dashboard_auth": self.dashboard_auth,
             "search_provider": self.search_provider,
             # Search keys sourced from the environment/.env are not persisted.
             "tavily_api_key": None if self._sourced_from_env("TAVILY_API_KEY", self.tavily_api_key) else self.tavily_api_key,
@@ -152,6 +159,7 @@ class NexusConfig:
         config.sandbox_mode = data.get("sandbox_mode", "off")
         config.tool_profile = data.get("tool_profile", "coding")
         config.free_rotation = data.get("free_rotation", True)
+        config.dashboard_auth = data.get("dashboard_auth", "token")
         config.search_provider = data.get("search_provider", "exa")
         config.user_name = data.get("user_name", "")
         config.tavily_api_key = data.get("tavily_api_key")
@@ -484,10 +492,22 @@ def _apply_env_defaults(config: NexusConfig) -> None:
             setattr(config, attr, os.environ[env_name])
 
 
+def _default_config_file() -> Path:
+    """HOME-aware default config.json, resolved at CALL time.
+
+    ``DEFAULT_CONFIG_FILE`` is snapshotted at import, which goes stale the
+    moment HOME changes (test isolation, su, ...). Consumers that resolve
+    ``~/.nexus`` at call time — dashboard/auth.py's raw-JSON fallback reads
+    ``Path.home()/.nexus/config.json`` — must see the same file load_config
+    reads, or keys like ``dashboard_auth`` get answered by a stale snapshot.
+    """
+    return Path.home() / ".nexus" / "config.json"
+
+
 def load_config(config_path: Path | None = None) -> NexusConfig:
     """Load configuration from file, auto-creating from env vars if needed."""
     load_env()  # global .env credentials for every entrypoint
-    path = config_path or DEFAULT_CONFIG_FILE
+    path = config_path or _default_config_file()
 
     if path.exists():
         try:
@@ -529,7 +549,7 @@ def load_config(config_path: Path | None = None) -> NexusConfig:
 
 def save_config(config: NexusConfig, config_path: Path | None = None) -> None:
     """Save configuration to file (chmod 600 — may contain legacy keys)."""
-    path = config_path or DEFAULT_CONFIG_FILE
+    path = config_path or _default_config_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump(config.to_dict(), f, indent=2)

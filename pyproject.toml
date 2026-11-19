@@ -50,7 +50,7 @@ dependencies = [
 #                      environment cannot run them without a full proot
 #                      Linux chroot (e.g. proot-distro). The Python
 #                      package itself is import-guarded (see
-#                      nexus/automation/browser.py, PLAYWRIGHT_AVAILABLE)
+#                      nexus/automation/browser.py, playwright_available)
 #                      so the rest of Nexus degrades gracefully without
 #                      it -- just don't expect real browser automation to
 #                      work on a stock Termux install.
