@@ -12,6 +12,8 @@
 
 [Report Bug](https://github.com/alpha-1-design/Nexus/issues) · [Contributing](./CONTRIBUTING.md)
 
+![Nexus TUI — live agent session with diff rendering](assets/screenshots/tui-main.png)
+
 </div>
 
 ---
@@ -19,13 +21,16 @@
 ## 🚀 Key Features
 
 *   **Multi-Agent Governance:** Employs specialized sub-agents (Planner, Coder, Reviewer, Researcher) that collaborate in a shared team chat to solve complex tasks.
+*   **True ReAct Loop:** Observe → Think → Act, iterated up to 8 tool rounds with streamed tool-call arguments, valid tool transcripts, and every assistant turn persisted — multi-turn sessions never lose context.
+*   **Free Provider Rotation:** 9 providers including Groq, OpenRouter, Cerebras, Gemini, Mistral, GitHub Models, HuggingFace, Cloudflare and Zhipu GLM free tiers. When one rate-limits, Nexus rotates to the next automatically so you keep coding non-stop on free keys.
+*   **Global `.env` Credentials:** One file (`~/.nexus/.env`) holds every API key — generated template, `chmod 600`, env-sourced keys never leak into config files.
+*   **`/init` Project Context:** One command scans your project (git, languages, manifests, build commands) and generates a `NEXUS.md` context file injected into every turn — like Claude Code's `/init`, works with zero LLM configured.
 *   **Neural OS Core:** Built on a "Governor" pattern that manages the lifecycle of memory, tools, and orchestration subsystems.
-*   **Real Memory Layer:** Facts, session history, and semantic (vector) recall are actually consulted on every turn — not just stored.
+*   **Real Memory Layer:** Facts, session history, and recall are consulted on every turn — not just stored.
 *   **382 Bundled Skills + 92-Server MCP Marketplace:** `nexus skill search`, `nexus mcp catalog/search/install` — a curated library ported from the community, available offline out of the box.
-*   **Atmospheric TUI:** High-fidelity Textual terminal UI with a Claude Code-style boxed input prompt, slash-command autocomplete, and live thinking/tool panels.
+*   **Atmospheric TUI:** Claude Code-class transcript with timestamps, collapsible tool-call cards, live unified-diff rendering for every edit, streaming responses with a blinking cursor, and live Thinking/Tools/Agents panels.
 *   **GIA Web Dashboard:** A dark, ChatGPT/LibreChat-style chat interface in the browser, with real token streaming, wired to the same agent core as the CLI.
 *   **Offline-First & Local:** Designed for Termux/Mobile, Nexus is optimized for low-bandwidth, high-latency environments.
-*   **Resilience Engine:** Self-correcting loop that proactively detects failures, analyzes logs, and improves agent performance through iteration.
 
 ---
 
@@ -43,41 +48,52 @@ Nexus operates on a multi-layer Neural OS architecture:
 ## 🛠️ Quick Start
 
 ```bash
-# Clone the repository
 git clone https://github.com/alpha-1-design/Nexus.git
 cd Nexus
 
-# Initialize Nexus (installs into an isolated venv under ~/.nexus,
-# including the TUI and web dashboard extras)
+# One command — auto-detects Android/Termux vs Linux/macOS.
+# Installs into an isolated venv under ~/.nexus with tui + dashboard.
 bash install.sh
+```
 
-# Start the interactive agent (terminal UI)
-nexus repl        # text REPL
-nexus tui         # full Textual terminal UI
+**Laptop options**
+```bash
+bash install.sh --with-browser   # add Playwright + Chromium (browser automation)
+bash install.sh --dev            # add dev/test extras (pytest, ruff, mypy)
+bash install.sh --uninstall      # remove venv + command + PATH lines (keeps your data)
+```
 
-# Or launch the web dashboard (GIA) instead
-nexus dashboard
+> **Termux:** the dispatcher routes to `install-termux.sh`, which installs the
+> tested Android target (`tui` + `dashboard`, pure Python + `psutil`). Voice
+> extras remain a stub, and Playwright is not usable on stock Termux — Nexus
+> degrades gracefully without both.
+
+**Connect a provider — free keys recommended:**
+```bash
+nexus auth       # wizard: pick "Auto (free rotation)", paste 1+ free keys
+```
+Free keys come from Groq, OpenRouter, Cerebras, Google AI Studio and more —
+the wizard shows the signup URL for each. Keys live in `~/.nexus/.env`
+(a commented template is generated for you). With rotation on, a rate-limited
+provider hands off to the next one automatically.
+
+**Start the agent:**
+```bash
+nexus tui        # full Textual terminal UI (screenshots above)
+nexus repl       # classic text REPL
+nexus dashboard  # GIA web dashboard
+```
+
+**In any project:**
+```bash
+/init            # scan the project, generate NEXUS.md context (in TUI/REPL)
+nexus init       # same, from the shell
 ```
 
 **First run:** if no LLM provider is configured yet, Nexus walks you through
-an interactive setup the first time you run a command that needs one
-(`repl`, `tui`, `dashboard`, `agents`, `team`). Utility commands like
-`nexus mcp catalog`, `nexus skill search`, and `nexus doctor` work
-immediately without any provider configured. You can also skip the wizard
-and configure directly with `nexus auth`.
-
-**Optional extras** (not installed by `install.sh` by default): voice
-(`pip install -e ".[voice]"`) and browser automation
-(`pip install -e ".[browser]"`).
-
-> **Termux note:** `install.sh` only ever installs `tui` + `dashboard`
-> (pure Python, plus `psutil`) — that's the tested, supported target for
-> Android. Voice mode is currently a stub with nothing actually wired up
-> yet, so there's no reason to install those extras today regardless of
-> platform. Browser automation (`playwright`) is not realistically usable
-> on stock Termux — it ships prebuilt browser binaries for glibc Linux,
-> which don't run under Android's bionic libc without a full `proot-distro`
-> Linux chroot. Nexus degrades gracefully without it either way.
+an interactive setup the first time you run a command that needs one.
+Utility commands like `nexus mcp catalog`, `nexus skill search`, and
+`nexus doctor` work immediately without any provider configured.
 
 **Verify the install worked:**
 ```bash
@@ -85,6 +101,12 @@ nexus doctor       # full diagnostic report — dependencies, config, provider, 
 nexus mcp catalog  # browse the bundled 92-server MCP marketplace
 nexus skill search python   # search the bundled skill library
 ```
+
+## 📸 Screenshots
+
+| Boot | Termux (90×30) |
+|---|---|
+| ![Nexus boot card](assets/screenshots/tui-boot.png) | ![Nexus on Termux](assets/screenshots/tui-termux.png) |
 
 ---
 

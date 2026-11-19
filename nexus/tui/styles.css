@@ -1,6 +1,6 @@
 /* Nexus TUI — Professional Theme
- * Inspired by Claude Desktop, VS Code dark, and OpenClaw.
- * Clean, minimal, with subtle cyan accents.
+ * Inspired by Claude Code, opencode, and VS Code dark.
+ * Minimal chrome, information-dense transcript, dim metadata, cyan accents.
  */
 
 $bg-primary:     #0a0a0f;
@@ -30,12 +30,129 @@ Screen {
     layers: base overlay;
 }
 
+/* ── Top monitor bar ─────────────────────────────────────────── */
+
+#system-monitor {
+    background: $bg-tertiary;
+    height: 1;
+    dock: top;
+    padding: 0 2;
+    border-bottom: solid $border;
+}
+
+.system-metric {
+    background: $bg-tertiary;
+    color: $text-secondary;
+    padding: 0 1;
+    width: 1fr;
+}
+
+/* ── Chat transcript (the hero) ──────────────────────────────── */
+
 #chat-panel {
     height: 1fr;
+    min-height: 8;
     border: none;
     padding: 0 1;
     background: $bg-primary;
 }
+
+#messages-container, #thinking-container, #tools-container, #agents-container {
+    height: auto;
+}
+
+/* One transcript entry: role badge + HH:MM stamp + wrapped body, with a
+ * left accent border color-coded per role. Stacked (not horizontal) so
+ * nothing is wasted at Termux widths. */
+ChatMessageWidget {
+    height: auto;
+    padding: 0 0 0 1;
+    margin: 0 0 1 0;
+    border-left: thick $border;
+}
+
+ChatMessageWidget.role-user      { border-left: thick $accent; }
+ChatMessageWidget.role-assistant { border-left: thick $purple; }
+ChatMessageWidget.role-system    { border-left: thick $text-dim; }
+ChatMessageWidget.role-tool      { border-left: thick $accent-dim; }
+
+.msg-header {
+    height: auto;
+    color: $text-secondary;
+}
+
+.content {
+    width: 1fr;
+    height: auto;
+    color: $text-primary;
+}
+
+/* ── Tool-call cards ─────────────────────────────────────────── */
+
+ToolCardWidget {
+    height: auto;
+    background: $bg-secondary;
+    border-left: thick $accent-dim;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+ToolCardWidget:focus, ToolCardWidget:hover {
+    background: $bg-tertiary;
+    border-left: thick $accent;
+}
+
+.tool-card-header {
+    height: 1;
+    color: $text-primary;
+}
+
+.tool-card-body {
+    display: none;
+    height: auto;
+    padding: 0 0 0 2;
+}
+
+ToolCardWidget.expanded .tool-card-body {
+    display: block;
+}
+
+.tool-card-args, .tool-card-result {
+    height: auto;
+    color: $text-secondary;
+}
+
+/* Unified diff block: + green, - red, @@/---/+++ dim cyan (colors in the
+ * rendered Text come from colors.py). Background + indent only — a second
+ * border column next to the card's own left border reads as noise. */
+DiffBlock {
+    height: auto;
+    background: $bg-tertiary;
+    padding: 0 1;
+    margin: 1 0;
+}
+
+/* ── Welcome card ────────────────────────────────────────────── */
+
+.welcome-logo {
+    height: auto;
+    margin: 1 0 0 1;
+}
+
+.welcome-sub {
+    height: 1;
+    margin: 0 0 1 2;
+    color: $text-dim;
+}
+
+.welcome-tips {
+    height: auto;
+    margin: 0 0 1 2;
+}
+
+/* ── Side panels (Thinking / Tools / Agents) ───────────────────
+ * Hidden by default; the app shows them when they have content and
+ * clamps their height so the chat never drops below its floor. */
 
 #thinking-panel, #tool-panel, #agents-panel {
     height: auto;
@@ -53,40 +170,29 @@ Screen {
     background: transparent;
     color: $accent;
     text-style: bold;
-    padding: 1 1;
-    height: 3;
-    content-align: left middle;
-    text-style: underline;
-}
-
-/* --- System Monitor Bar --- */
-#system-monitor {
-    background: $bg-tertiary;
-    height: 1;
-    dock: top;
-    padding: 0 2;
-    border-bottom: solid $border;
-}
-
-.system-metric {
-    background: $bg-tertiary;
-    color: $text-secondary;
     padding: 0 1;
+    height: 1;
 }
 
-.system-metric.highlight {
-    color: $accent;
-    text-style: bold;
+.step-header {
+    height: 1;
+    color: $text-primary;
 }
 
-/* --- Input Bar ---
- * Claude Code's most recognizable visual signature is the rounded,
- * boxed prompt at the bottom of the screen rather than a plain docked
- * bar. Match that here instead of a flat top border. */
+.step-details {
+    height: auto;
+    padding: 0 0 0 4;
+    color: $text-secondary;
+}
+
+/* ── Input bar ─────────────────────────────────────────────────
+ * Claude Code's recognizable rounded boxed prompt at the bottom, plus a
+ * dim hint line for keybinds. */
+
 #input-bar {
     background: $bg-secondary;
     border: round $border-active;
-    height: 5;
+    height: auto;
     padding: 0 2;
     margin: 0 1 1 1;
     dock: bottom;
@@ -96,11 +202,15 @@ Screen {
     border: round $accent;
 }
 
+.input-row {
+    height: 3;
+}
+
 .prompt {
     color: $accent;
     text-style: bold;
-    padding: 1 1;
-    width: 7;
+    width: 8;
+    content-align: left middle;
 }
 
 .input-field {
@@ -108,6 +218,7 @@ Screen {
     background: $bg-secondary;
     color: $text-primary;
     width: 1fr;
+    height: 3;
     padding: 0 1;
 }
 
@@ -115,9 +226,15 @@ Screen {
     border: none;
 }
 
-/* --- Status Bar ---
- * A single unobtrusive line, matching Claude Code's minimal bottom
- * status line rather than a heavier chrome bar. */
+.input-hint {
+    height: 1;
+    color: $text-dim;
+    padding: 0 0 0 8;
+}
+
+/* ── Status bar ────────────────────────────────────────────────
+ * Single unobtrusive dim line at the very bottom. */
+
 #status-bar {
     background: $bg-primary;
     color: $text-dim;
@@ -127,34 +244,13 @@ Screen {
     border-top: none;
 }
 
-/* --- Chat Messages --- */
-.message-row {
-    padding: 1 0;
-    margin: 0 1;
-    height: auto;
-}
+/* ── Cards ───────────────────────────────────────────────────── */
 
-.timestamp {
-    color: $text-dim;
-    width: 10;
-}
-
-.role {
-    width: 10;
-    text-style: bold;
-}
-
-.content {
-    width: 1fr;
-    padding-left: 1;
-}
-
-/* --- Cards --- */
 AgentCard, ToolStatusWidget, ThinkingBlock {
-    padding: 1 2;
-    margin: 0 1;
-    background: $bg-tertiary;
-    height: 3;
+    padding: 0 1;
+    margin: 0;
+    background: transparent;
+    height: auto;
 }
 
 AgentCard:hover, ToolStatusWidget:hover, ThinkingBlock:hover {
@@ -165,7 +261,8 @@ AgentCard:hover, ToolStatusWidget:hover, ThinkingBlock:hover {
     display: none;
 }
 
-/* --- Slash Command Dropdown --- */
+/* ── Slash Command Dropdown ──────────────────────────────────── */
+
 #slash-dropdown {
     background: $bg-secondary;
     border: solid $border;
@@ -206,7 +303,8 @@ AgentCard:hover, ToolStatusWidget:hover, ThinkingBlock:hover {
     color: $text-secondary;
 }
 
-/* --- Notifications --- */
+/* ── Notifications ───────────────────────────────────────────── */
+
 NotificationOverlay {
     background: $bg-tertiary;
     border: solid $accent-dim;

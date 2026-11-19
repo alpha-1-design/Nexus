@@ -3020,6 +3020,20 @@ def initialize_providers(config) -> None:
         manager.set_active(config.active_provider)
 
 
+@cli.command("init")
+@click.option("--force", is_flag=True, default=False, help="Regenerate without prompts (behavior is identical: always backup + regenerate, non-interactive)")
+def init_cmd(force: bool) -> None:
+    """Scan this project and generate a NEXUS.md project-context file."""
+    from pathlib import Path
+
+    from nexus.project import init_project_context, render_init_report
+
+    report = init_project_context(Path.cwd())
+    click.echo(render_init_report(report))
+    if not report.generated_path:
+        sys.exit(1)
+
+
 def main():
     """Main entry point."""
     # Fast path for version and help to keep it 'clean'
@@ -3041,7 +3055,7 @@ def main():
     PROVIDER_INDEPENDENT_COMMANDS = {  # noqa: N806 -- intentionally constant-style
         "mcp", "skill", "plugin", "config", "doctor", "auth", "completion",
         "upgrade", "safety", "sync", "learn", "phone", "voice", "exec",
-        "termux", "self-improve", "self_improve",
+        "termux", "self-improve", "self_improve", "init",
     }
     subcommand = sys.argv[1] if len(sys.argv) > 1 else None
     needs_provider_check = subcommand not in PROVIDER_INDEPENDENT_COMMANDS

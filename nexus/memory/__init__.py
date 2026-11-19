@@ -4,6 +4,7 @@ Provides session management, facts storage, and project context.
 """
 
 import json
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -104,28 +105,43 @@ class Memory:
             d.mkdir(parents=True, exist_ok=True)
 
     def _load_facts(self) -> None:
-        """Load facts from disk."""
-        if self.facts_file.exists():
+        """Load facts from disk (tolerates empty/corrupt files)."""
+        if not self.facts_file.exists():
+            return
+        try:
             with open(self.facts_file) as f:
                 data = json.load(f)
-                for key, value in data.items():
-                    if isinstance(value, dict):
-                        self._facts[key] = Fact(
-                            key=key,
-                            value=value.get("value"),
-                            category=value.get("category", "general"),
-                            confidence=value.get("confidence", 1.0),
-                            source=value.get("source", "session"),
-                            created_at=datetime.fromisoformat(value.get("created_at", datetime.now().isoformat())),
-                        )
-                    else:
-                        self._facts[key] = Fact(key=key, value=value)
+        except (json.JSONDecodeError, OSError):
+            # Concurrent writers (multiple apps / parallel tests) can briefly
+            # truncate the file mid-write. An unreadable facts store must
+            # never block boot -- keep the corrupt file for forensics and
+            # start fresh.
+            try:
+                if self.facts_file.stat().st_size > 0:
+                    self.facts_file.replace(self.facts_file.with_suffix(".json.corrupt"))
+            except OSError:
+                pass
+            return
+        for key, value in data.items():
+            if isinstance(value, dict):
+                self._facts[key] = Fact(
+                    key=key,
+                    value=value.get("value"),
+                    category=value.get("category", "general"),
+                    confidence=value.get("confidence", 1.0),
+                    source=value.get("source", "session"),
+                    created_at=datetime.fromisoformat(value.get("created_at", datetime.now().isoformat())),
+                )
+            else:
+                self._facts[key] = Fact(key=key, value=value)
 
     def _save_facts(self) -> None:
-        """Save facts to disk."""
+        """Save facts to disk atomically (temp + rename, crash-safe)."""
         data = {key: fact.to_dict() for key, fact in self._facts.items()}
-        with open(self.facts_file, "w") as f:
+        tmp = self.facts_file.with_suffix(".json.tmp")
+        with open(tmp, "w") as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp, self.facts_file)
 
     def create_session(self) -> Session:
         """Create a new session."""
@@ -138,11 +154,13 @@ class Memory:
         return session
 
     def save_session(self, session: Session) -> None:
-        """Save a session to disk."""
+        """Save a session to disk atomically (temp + rename, crash-safe)."""
         session.updated_at = datetime.now()
         path = self.sessions_dir / f"{session.id}.json"
-        with open(path, "w") as f:
+        tmp = path.with_suffix(".json.tmp")
+        with open(tmp, "w") as f:
             json.dump(session.to_dict(), f, indent=2)
+        os.replace(tmp, path)
 
     def load_session(self, session_id: str) -> Session | None:
         """Load a session from disk."""

@@ -166,7 +166,7 @@ Rules:
                 PlanStep(
                     step_id=i,
                     description=step_data.get("description", ""),
-                    priority=StepPriority(step_data.get("priority", "MED")),
+                    priority=StepPriority.__members__.get(str(step_data.get("priority", "MED")).upper(), StepPriority.MED),
                     confidence=step_data.get("confidence", 0.8),
                     effort_minutes=step_data.get("effort_minutes", 1),
                     tool_name=step_data.get("tool_name"),

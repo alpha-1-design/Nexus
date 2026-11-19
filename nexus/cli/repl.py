@@ -1,6 +1,7 @@
 """Interactive REPL for Nexus."""
 
 import asyncio
+import json
 import os
 import readline
 import sys
@@ -43,6 +44,17 @@ def _style(text: str, fg: str = "", bold: bool = False) -> str:
 
 class REPL:
     """Interactive REPL for Nexus."""
+
+    # ReAct loop bound: max LLM rounds per user turn that may end in tool
+    # calls before one final tool-free answer is forced. Configurable via
+    # config["max_tool_rounds"].
+    MAX_TOOL_ROUNDS = 8
+
+    # Instruction for the final call made after the round budget is spent.
+    FORCED_ANSWER_PROMPT = (
+        "Tool round limit reached. Based on the information gathered so far, "
+        "provide your best final answer now without calling any more tools."
+    )
 
     def __init__(self, config: dict[str, Any] | None = None):
         self.config = config or {}
@@ -88,6 +100,15 @@ class REPL:
         self._last_failed_tool: tuple[str, dict, str] | None = None
         self._retry_stack: list[tuple[str, dict, str]] = []
         self._undo_stack: list[int] = []
+
+        # ReAct loop state
+        self.max_tool_rounds = int(self.config.get("max_tool_rounds", self.MAX_TOOL_ROUNDS))
+        self._abort_requested = False
+        self._task_running = False
+
+        # Project context (NEXUS.md) — lazily loaded on first turn, /init refreshes it
+        self._nexus_md_cache: str | None = None
+        self._nexus_md_loaded = False
 
     async def _ensure_provider(self) -> None:
         """Ensure a working provider is configured. Auto-setup OpenCode Zen if needed."""
@@ -160,6 +181,10 @@ class REPL:
                     if loaded:
                         self.session = loaded
                         for msg in loaded.messages[-20:]:
+                            # Skip tool-call transcript entries; the session
+                            # store alone can't rebuild a valid tool sequence.
+                            if msg.get("role") == "tool" or msg.get("tool_calls"):
+                                continue
                             if msg["role"] == "user":
                                 self.messages.append(Message(role="user", content=msg["content"]))
                             elif msg["role"] == "assistant":
@@ -225,7 +250,7 @@ class REPL:
             "/plugin", "/sync", "/learn", "/improve", "/reflect",
             "/skills", "/skill", "/providers", "/models",
             "/context", "/stats", "/retry", "/undo", "/diff",
-            "/status", "/phone", "/partner", "/help",
+            "/status", "/phone", "/partner", "/help", "/init",
         ]
 
         def completer(text: str, state: int) -> str | None:
@@ -342,6 +367,11 @@ class REPL:
         project_summary = "Environment: Termux (Android)\n"
         project_summary += f"Project Structure: {self.indexer.get_summary()}\n"
 
+        # Layer 3.5: Generated project context (NEXUS.md), capped.
+        nexus_md_ctx = self._get_nexus_md_context()
+        if nexus_md_ctx:
+            project_summary += "\n### PROJECT CONTEXT (NEXUS.md)\n" + nexus_md_ctx + "\n"
+
         # Layer 4: Active Working Memory (Last 5 files read/edited)
         recent_files = self.safety.get_read_files()[-5:]
         working_memory = ""
@@ -375,6 +405,21 @@ class REPL:
 
 When using tools, always provide clear feedback about what you're doing.
 """
+
+    def _get_nexus_md_context(self) -> str:
+        """Load NEXUS.md from the workspace (capped), cached after first use.
+
+        Auto-detection: the first turn that builds a system prompt picks up an
+        existing NEXUS.md automatically — /init is only needed to (re)generate.
+        """
+        if not self._nexus_md_loaded:
+            from pathlib import Path as _Path
+
+            from ..project import load_nexus_md
+
+            self._nexus_md_cache = load_nexus_md(_Path.cwd())
+            self._nexus_md_loaded = True
+        return self._nexus_md_cache or ""
 
     def _format_tools(self) -> str:
         """Format tools for the system prompt."""
@@ -454,8 +499,37 @@ When using tools, always provide clear feedback about what you're doing.
 
         return result
 
+    async def _stream_llm_turn(self, messages: list[Message], tools: list[dict[str, Any]] | None) -> tuple[str, list]:
+        """Stream one LLM turn; returns (accumulated_text, complete_tool_calls).
+
+        The provider buffers incremental tool-call argument fragments and emits
+        each call as one complete ToolCall right before the done chunk (see
+        providers/base.py), so nothing is executed mid-stream.
+        """
+        response_text = ""
+        tool_calls: list = []
+        async for chunk in self.manager.stream(messages, tools):
+            if self._abort_requested:
+                break
+            if chunk.content:
+                self._first_token_received = True
+                print(chunk.content, end="", flush=True)
+                response_text += chunk.content
+            if chunk.tool_call:
+                tool_calls.append(chunk.tool_call)
+        print()  # Newline after streaming
+        return response_text, tool_calls
+
     async def _generate_response(self, user_input: str, print_result: bool = True) -> str:
-        """Generate a response from the AI with dynamic context pulsing."""
+        """Generate a response from the AI with a real ReAct loop.
+
+        Each round: one LLM turn (streamed when enabled). If it requests tool
+        calls, execute them and commit a protocol-valid transcript — the
+        assistant message carrying tool_calls immediately followed by its
+        role="tool" results — to both in-memory history and the session store,
+        then continue. Stops when the model answers without tools, or after
+        max_tool_rounds, in which case one final tool-free call is forced.
+        """
         # Check for proactive insights if user is 'free' (idle/short input)
         if len(user_input.split()) < 3:
             insight = self._get_proactive_insight()
@@ -465,7 +539,7 @@ When using tools, always provide clear feedback about what you're doing.
         # Visual 'Context Pulse'
         self._show_context_pulse()
 
-        # Add user message
+        # Persist the user turn (in-memory history + session store)
         self.messages.append(Message(role="user", content=user_input))
         self.session.messages.append({"role": "user", "content": user_input})
 
@@ -475,97 +549,103 @@ When using tools, always provide clear feedback about what you're doing.
             if spawned:
                 self._show_neural_branching(spawned)
 
-        # Build messages with system prompt
-        messages = [Message(role="system", content=self._get_system_prompt())] + self.messages
-
-        # Get tools
         tools = self.registry.to_openai_format()
+        system_prompt = self._get_system_prompt()
 
+        self._abort_requested = False
+        self._task_running = True
         try:
-            if self.streaming:
-                response_text = ""
-                tool_results = []
+            final_content = ""
+            streamed_final = False
+            for _round in range(self.max_tool_rounds):
+                # Cooperative abort (via /abort): stop before the next LLM call.
+                if self._abort_requested:
+                    break
 
-                async for chunk in self.manager.stream(messages, tools):
-                    if chunk.content:
-                        self._first_token_received = True
-                        print(chunk.content, end="", flush=True)
-                        response_text += chunk.content
-
-                    if chunk.tool_call:
-                        tool_call = chunk.tool_call
-                        print(f"\n\n[Calling tool: {tool_call.name}]\n")
-                        exec_step = self.thinking_engine.start_step(
-                            ThinkingState.EXECUTING,
-                            f"Calling tool: {tool_call.name}",
-                            tool_name=tool_call.name,
-                            tool_args=tool_call.arguments,
-                        )
-                        tool_result = await self._execute_single_tool(tool_call, exec_step)
-                        tool_results.append((tool_call, tool_result))
-
-                print()  # Newline after streaming
-
-                if tool_results:
-                    for tc, res in tool_results:
-                        messages.append(
-                            Message(
-                                role="tool",
-                                content=res.content,
-                                name=tc.name,
-                                tool_call_id=tc.id,
-                            )
-                        )
-                    final_response = await self.manager.complete(messages, tools)
-                    final_content = final_response.content
-                    if print_result and final_content:
-                        cyan = "\033[36m"
-                        reset = "\033[0m"
-                        print(f"\n{cyan}◈{reset} {final_content}")
-                    return final_content
+                # Reason: one LLM turn over the full persisted history.
+                messages = [Message(role="system", content=system_prompt)] + self.messages
+                if self.streaming:
+                    assistant_text, tool_calls = await self._stream_llm_turn(messages, tools)
                 else:
-                    return response_text
+                    response = await self.manager.complete(messages, tools)
+                    assistant_text = response.content or ""
+                    tool_calls = list(response.tool_calls)
 
-            else:
-                response = await self.manager.complete(messages, tools)
+                if not tool_calls:
+                    # The model answered — final turn of the task.
+                    final_content = assistant_text
+                    streamed_final = self.streaming
+                    break
+
+                # Act: execute every requested tool. Unexpected failures become
+                # error results so the transcript never has unanswered tool_calls.
                 tool_results = []
-
-                for tool_call in response.tool_calls:
+                for tool_call in tool_calls:
+                    print(f"\n[Calling tool: {tool_call.name}]")
                     exec_step = self.thinking_engine.start_step(
                         ThinkingState.EXECUTING,
                         f"Calling tool: {tool_call.name}",
                         tool_name=tool_call.name,
                         tool_args=tool_call.arguments,
                     )
-                    tool_result = await self._execute_single_tool(tool_call, exec_step)
-                    tool_results.append((tool_call, tool_result))
+                    try:
+                        result = await self._execute_single_tool(tool_call, exec_step)
+                    except Exception as exc:
+                        self.thinking_engine.finish_step(exec_step, error=str(exc))
+                        result = ToolResult(success=False, content=f"Tool execution failed: {exc}", error=str(exc))
+                    tool_results.append((tool_call, result))
 
-                if tool_results:
-                    for tc, res in tool_results:
-                        messages.append(
-                            Message(
-                                role="tool",
-                                content=res.content,
-                                name=tc.name,
-                                tool_call_id=tc.id,
-                            )
-                        )
-                    final_response = await self.manager.complete(messages, tools)
-                    final_content = final_response.content
-                else:
-                    final_content = response.content
+                # Observe: commit the round atomically. OpenAI-protocol
+                # endpoints require the assistant message that carries
+                # tool_calls to precede its role="tool" results.
+                self.messages.append(Message(role="assistant", content=assistant_text, tool_calls=tool_calls))
+                self.session.messages.append({
+                    "role": "assistant",
+                    "content": assistant_text,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
+                        }
+                        for tc in tool_calls
+                    ],
+                })
+                for tc, res in tool_results:
+                    self.messages.append(Message(role="tool", content=res.content, name=tc.name, tool_call_id=tc.id))
+                    self.session.messages.append({
+                        "role": "tool",
+                        "content": res.content,
+                        "name": tc.name,
+                        "tool_call_id": tc.id,
+                    })
+            else:
+                # Round budget exhausted: force one final tool-free answer over
+                # the accumulated (valid) transcript.
+                messages = [Message(role="system", content=system_prompt)] + self.messages
+                messages.append(Message(role="user", content=self.FORCED_ANSWER_PROMPT))
+                response = await self.manager.complete(messages, None)
+                final_content = response.content or ""
 
-                if print_result and final_content:
-                    cyan = "\033[36m"
-                    reset = "\033[0m"
-                    print(f"\n{cyan}◈{reset} {final_content}")
-                return final_content
-
+            # Persist the final assistant turn (in-memory history + session store)
+            if final_content:
+                self.messages.append(Message(role="assistant", content=final_content))
+                self.session.messages.append({"role": "assistant", "content": final_content})
             self.memory.save_session(self.session)
+
+            # Live-streamed content already reached the terminal; print the
+            # styled summary only for answers that were not streamed.
+            if print_result and final_content and not streamed_final:
+                cyan = "\033[36m"
+                reset = "\033[0m"
+                print(f"\n{cyan}◈{reset} {final_content}")
             return final_content
 
         except Exception as e:
             return f"Error: {e}"
+        finally:
+            self._task_running = False
+            self._abort_requested = False
 
     def _get_proactive_insight(self) -> str | None:
         """Fetch a proactive suggestion from the Shadow Architect."""
@@ -690,6 +770,7 @@ When using tools, always provide clear feedback about what you're doing.
             commands = [
                 ("/exit, /quit", "Exit the REPL"),
                 ("/help, /h", "Show this help"),
+                ("/init", "Scan project, generate NEXUS.md context"),
                 ("/clear", "Clear conversation"),
                 ("/history", "Show message history"),
                 ("/tools", "List available tools"),
@@ -724,6 +805,21 @@ When using tools, always provide clear feedback about what you're doing.
                 print(f"{cyan}  ║{reset}  {dim}{cmd:<20}{reset} {desc:<30} {cyan}║{reset}")
             print(f"{cyan}  ╚══════════════════════════════════════════════════════╝{reset}")
             print(f"  {dim}Tab-complete commands by typing / and pressing Tab{reset}")
+            return True
+
+        elif cmd == "init":
+            from pathlib import Path as _Path
+
+            from ..project import init_project_context, render_init_report
+
+            try:
+                report = init_project_context(_Path.cwd())
+                print(render_init_report(report))
+                # Force the project context to reload from the fresh NEXUS.md.
+                self._nexus_md_loaded = False
+                self._nexus_md_cache = None
+            except Exception as e:
+                print(f"{self.personality.failure()} /init failed: {e}")
             return True
 
         elif cmd == "safety":
@@ -785,10 +881,16 @@ When using tools, always provide clear feedback about what you're doing.
 
         elif cmd == "model":
             if args:
-                asyncio.create_task(self.manager.switch_model(args))
-                print(f"Model switched to: {args}")
+                try:
+                    # Await the switch and verify before reporting success.
+                    await self.manager.switch_model(args)
+                    cfg = self.manager.get_provider_config(self.manager.active_provider)
+                    print(f"Model switched to: {cfg.model if cfg else args}")
+                except Exception as e:
+                    print(f"Model switch failed: {e}")
             else:
-                print(f"Current model: {self.manager.active_provider}")
+                cfg = self.manager.get_provider_config(self.manager.active_provider)
+                print(f"Current model: {cfg.model if cfg else self.manager.active_provider}")
             return True
 
         elif cmd == "stream":
@@ -868,8 +970,12 @@ When using tools, always provide clear feedback about what you're doing.
             return True
 
         elif cmd == "abort":
-            print("Aborting current task...")
-            self.running = False
+            # Abort the active task/loop only — never the whole REPL.
+            if self._task_running:
+                self._abort_requested = True
+                print("Aborting active task after the current step...")
+            else:
+                print("No active task to abort.")
             return True
 
         elif cmd == "think":
@@ -892,6 +998,10 @@ When using tools, always provide clear feedback about what you're doing.
                     self.session = session
                     self.messages.clear()
                     for msg in session.messages[-20:]:
+                        # Skip tool-call transcript entries; the session store
+                        # alone can't rebuild a valid tool sequence.
+                        if msg.get("role") == "tool" or msg.get("tool_calls"):
+                            continue
                         self.messages.append(Message(role=msg["role"], content=msg["content"]))
                     print(f"Loaded session: {session.id}")
                 else:
@@ -1310,6 +1420,11 @@ When using tools, always provide clear feedback about what you're doing.
 
         from ..cli.welcome import display_welcome
         display_welcome()
+
+        # Auto-detect existing project context: NEXUS.md present but not yet
+        # loaded -> it will be injected from the first turn onward.
+        if not self._nexus_md_loaded and self._get_nexus_md_context():
+            print("\033[90m  ▸ Project context loaded from NEXUS.md (run /init to regenerate)\033[0m")
 
         while self.running:
             try:

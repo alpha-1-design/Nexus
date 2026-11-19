@@ -1,20 +1,31 @@
-"""Nexus TUI — Professional Terminal User Interface."""
+"""Nexus TUI — Professional Terminal User Interface.
+
+Architecture: the singleton orchestrator is the only brain; the TUI observes
+it through three channels —
+  1. orchestrator.set_ui_callback  → thinking/error events
+  2. a recording wrapper around the tool registry → live tool cards + panels
+  3. the ThinkingEngine's on_update → live thinking steps
+Everything else (streaming tokens, panel layout, status) is driven from the
+state manager or directly in _process_input.
+"""
 
 import asyncio
 import os
+import time
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Footer, Header, Input
+from textual.widgets import Input
 
 from ..agent import get_orchestrator
+from ..thinking import get_thinking_engine
 from .state import (
+    AgentStatus,
     ChatMessage,
     MessageRole,
-    TUIState,
     get_state_manager,
 )
 from .task_wrapper import OrchestrationTask
@@ -27,9 +38,81 @@ from .widgets import (
     SlashCommandDropdown,
     StatusBar,
     SystemMonitor,
+    ThinkingBlock,
     ThinkingPanel,
     ToolPanel,
+    WelcomeCard,
 )
+
+# Vertical space the chat transcript is guaranteed, by screen height.
+# Termux (30 rows) gets a smaller floor than a desktop (38+ rows).
+_CHAT_FLOOR_LARGE = 12
+_CHAT_FLOOR_SMALL = 8
+_SIDE_PANEL_CAP = 12
+
+
+class ToolCallRecorder:
+    """Wraps a ToolRegistry so the TUI can observe every tool execution.
+
+    The orchestrator only ever does `registry.get(name)` -> `tool.execute()`
+    (plus list_all/to_openai_format for the model), so a thin proxy that
+    wraps `get()` captures the entire live path without touching the
+    orchestrator itself. All other attributes delegate to the real registry.
+    """
+
+    def __init__(self, registry: Any, on_start: Callable, on_finish: Callable):
+        self._registry = registry
+        self._on_start = on_start
+        self._on_finish = on_finish
+        self._seq = 0
+
+    def next_card_id(self) -> str:
+        self._seq += 1
+        return f"tc{self._seq}"
+
+    def get(self, name: str):
+        tool = self._registry.get(name)
+        if tool is None:
+            return None
+        return RecordedTool(tool, self)
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(self._registry, attr)
+
+
+class RecordedTool:
+    """Per-execution observer around a BaseTool."""
+
+    def __init__(self, tool: Any, recorder: ToolCallRecorder):
+        self._tool = tool
+        self._recorder = recorder
+
+    @property
+    def definition(self):
+        return self._tool.definition
+
+    async def execute(self, **kwargs):
+        name = self._tool.definition.name
+        card_id = self._recorder.next_card_id()
+        self._recorder._on_start(name, kwargs, card_id)
+        started = time.monotonic()
+        try:
+            result = await self._tool.execute(**kwargs)
+        except Exception as e:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            self._recorder._on_finish(card_id, name, False, None, str(e), None, duration_ms)
+            raise
+        duration_ms = int((time.monotonic() - started) * 1000)
+        diff = None
+        try:
+            diff = result.metadata.get("diff")
+        except Exception:
+            pass
+        self._recorder._on_finish(card_id, name, result.success, result.content, result.error, diff, duration_ms)
+        return result
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(self._tool, attr)
 
 
 class NexusTUI(App):
@@ -54,15 +137,37 @@ class NexusTUI(App):
         super().__init__(**kwargs)
         self.orchestrator = get_orchestrator()
         self.state_manager = get_state_manager()
-        self.orchestrator.set_ui_callback(self._on_orchestrator_event)
         self.state_manager.reset()
+        # BUGFIX (recon M2-1): the ui_callback used to be wired to the
+        # singleton but _process_input built a FRESH orchestrator per message,
+        # so panels never received events. The singleton is used everywhere
+        # now — both for the callback and for running turns.
+        self.orchestrator.set_ui_callback(self._on_orchestrator_event)
+        # Live tool observation: wrap the registry the singleton orchestrator
+        # holds so start/finish feed the Tools panel and transcript cards.
+        self.orchestrator.tools = ToolCallRecorder(
+            self.orchestrator.tools,
+            self._on_tool_start,
+            self._on_tool_finish,
+        )
+        # ThinkingEngine is a process-global singleton; register ONCE (its
+        # on_update appends without dedupe, so registering per turn would
+        # duplicate every step).
+        self._seen_thinking_steps: set[str] = set()
+        get_thinking_engine().on_update(self._on_thinking_event)
+
         self._command_history: list[str] = []
         self._history_index = -1
         self._termux_mode = os.path.exists("/data/data/com.termux")
-        self._version = "0.1.0"
-        self._show_dropdown = False
         from .. import __version__
         self._version = __version__
+        self._show_dropdown = False
+        self._stream_msg: ChatMessage | None = None
+        self._agent_name = "nexus-core"
+        self._panel_recency: dict[str, int] = {}
+        self._panel_seq = 0
+
+    # ── orchestrator event channels ─────────────────────────────
 
     def _on_orchestrator_event(self, event_type: str, data: Any):
         if event_type == "thinking":
@@ -72,20 +177,76 @@ class NexusTUI(App):
                 data.get("details", ""),
             )
         elif event_type == "agent_status":
+            status = data.get("status")
+            if isinstance(status, str):
+                try:
+                    status = AgentStatus[status.upper()]
+                except KeyError:
+                    status = AgentStatus.IDLE
             self.state_manager.update_agent_status(
-                data.get("name"), data.get("status"), data.get("task"),
+                data.get("name"), status, data.get("task"),
+            )
+        elif event_type == "error":
+            self.state_manager.set_error(str(data))
+
+    def _on_thinking_event(self, event) -> None:
+        """ThinkingEngine events: ("start"|"update"|"finish", step)."""
+        kind, step = event
+        if kind == "start":
+            if step.step_id in self._seen_thinking_steps:
+                return
+            self._seen_thinking_steps.add(step.step_id)
+            self.state_manager.add_thinking_step(
+                step_number=len(self._seen_thinking_steps),
+                description=step.title,
+                details=step.detail or "",
+                step_id=step.step_id,
+            )
+        elif kind == "finish":
+            self.state_manager.update_thinking_step(
+                step.step_id,
+                status="error" if step.state.value == "error" else "done",
+                details=step.detail or "",
+                duration_ms=int(step.duration_ms) if step.duration_ms else None,
             )
 
+    def _on_tool_start(self, name: str, args: dict[str, Any], card_id: str) -> None:
+        self.state_manager.start_tool(name)
+        target = next((str(v) for v in args.values() if isinstance(v, str) and v), name)
+        self.state_manager.update_agent_status(self._agent_name, AgentStatus.TOOL_USE, f"{name}: {target}")
+        try:
+            chat_panel = self.query_one("#chat-panel", ChatPanel)
+            chat_panel.add_tool_card(name, args)
+            self._touch_panel("tool-panel")
+        except Exception:
+            pass  # panel not mounted yet
+
+    def _on_tool_finish(self, card_id: str, name: str, success: bool, result: str | None, error: str | None, diff: str | None, duration_ms: int) -> None:
+        self.state_manager.finish_tool(name, result=(result or "")[:400] or None, error=error)
+        try:
+            chat_panel = self.query_one("#chat-panel", ChatPanel)
+            chat_panel.update_tool_card(
+                card_id,
+                status="done" if success else "error",
+                result=result,
+                error=error,
+                duration_ms=duration_ms,
+                diff=diff,
+            )
+        except Exception:
+            pass
+
+    # ── layout ───────────────────────────────────────────────────
+
     def compose(self) -> ComposeResult:
-        yield Header()
+        # No Header/Footer: minimal chrome, the transcript is the hero.
         yield SystemMonitor()
         yield ChatPanel(id="chat-panel")
-        yield ThinkingPanel(id="thinking-panel")
-        yield ToolPanel(id="tool-panel")
-        yield AgentsPanel(id="agents-panel")
+        yield ThinkingPanel(id="thinking-panel", classes="hidden")
+        yield ToolPanel(id="tool-panel", classes="hidden")
+        yield AgentsPanel(id="agents-panel", classes="hidden")
         yield InputBar(id="input-bar")
         yield StatusBar(id="status-bar")
-        yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#command-input", Input).focus()
@@ -93,25 +254,32 @@ class NexusTUI(App):
 
         import threading
 
-        from ..memory.shadow import get_shadow_indexer
-        self.shadow_indexer = get_shadow_indexer()
-        threading.Thread(target=self.shadow_indexer.start, daemon=True).start()
+        try:
+            from ..memory.shadow import get_shadow_indexer
+            self.shadow_indexer = get_shadow_indexer()
+            threading.Thread(target=self.shadow_indexer.start, daemon=True).start()
+        except Exception:
+            self.shadow_indexer = None  # optional subsystem
 
         chat_panel = self.query_one("#chat-panel", ChatPanel)
-        chat_panel.add_message(ChatMessage(
-            role=MessageRole.SYSTEM,
-            content="Welcome to Nexus. Type /help for commands.",
-            timestamp=datetime.now(),
-        ))
+        chat_panel.query_one("#messages-container").mount(WelcomeCard(version=self._version))
         self._update_status_bar()
 
-    def on_input_changed(self, event: Input.Changed) -> None:
-        value = event.value
-        if value.startswith("/"):
-            self._show_slash_dropdown(filter_text=value)
-        else:
-            if self._show_dropdown:
-                self._hide_dropdown()
+    def on_unmount(self) -> None:
+        """Detach from the process-global singletons. Without this, a closed
+        app instance stays subscribed: the next notification hits query_one()
+        on an unmounted app and crashes whoever mutated state next."""
+        try:
+            self.state_manager._listeners.remove(self._on_state_change)
+        except (ValueError, AttributeError):
+            pass
+        try:
+            get_thinking_engine()._callbacks.remove(self._on_thinking_event)
+        except (ValueError, AttributeError):
+            pass
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._relayout_panels()
 
     def on_key(self, event: events.Key) -> None:
         if not self._show_dropdown:
@@ -133,6 +301,83 @@ class NexusTUI(App):
         # InputBar.on_input_submitted instead, which is where Enter is
         # actually observable.
 
+    # ── panel management ─────────────────────────────────────────
+
+    def _touch_panel(self, panel_id: str) -> None:
+        """Record that a panel received content (drives space priority)."""
+        self._panel_seq += 1
+        self._panel_recency[panel_id] = self._panel_seq
+        self._relayout_panels()
+
+    def _relayout_panels(self) -> None:
+        """Share the vertical space below the chat evenly between the visible
+        side panels, capped so the chat never drops below its floor. Panels
+        shrink together as space gets tight (Termux) instead of stacking the
+        chat away; space left over goes back to the chat (1fr)."""
+        height = self.size.height
+        if height <= 0:
+            return
+        chat_floor = _CHAT_FLOOR_LARGE if height >= 36 else (10 if height >= 30 else _CHAT_FLOOR_SMALL)
+        try:
+            monitor = self.query_one("#system-monitor")
+            input_bar = self.query_one("#input-bar")
+            status_bar = self.query_one("#status-bar")
+        except Exception:
+            return  # compose not finished yet
+        fixed = monitor.outer_size.height + input_bar.outer_size.height + status_bar.outer_size.height
+        available = max(0, height - fixed - chat_floor)
+
+        # Most recently active panel first.
+        ordered = sorted(self._panel_recency, key=lambda pid: self._panel_recency[pid], reverse=True)
+        visible = []
+        for panel_id in ordered:
+            try:
+                panel = self.query_one(f"#{panel_id}")
+            except Exception:
+                continue
+            if not panel.has_class("hidden"):
+                visible.append(panel)
+        if not visible:
+            return
+        per_panel = max(3, min(_SIDE_PANEL_CAP, available // len(visible)))
+        for panel in visible:
+            panel.styles.max_height = per_panel
+
+    # ── state sync ────────────────────────────────────────────────
+
+    def _on_state_change(self, state) -> None:
+        self._update_status_bar()
+        thinking_panel = self.query_one("#thinking-panel", ThinkingPanel)
+        tool_panel = self.query_one("#tool-panel", ToolPanel)
+        agents_panel = self.query_one("#agents-panel", AgentsPanel)
+
+        for step in state.thinking_steps:
+            # Identity check (not step_id): engine steps carry ids, but
+            # manually-added steps may all have step_id=None.
+            blocks = [b for b in thinking_panel.query(ThinkingBlock) if b.step is step]
+            if blocks:
+                blocks[0].refresh_step()  # status/details changed in place
+            else:
+                thinking_panel.add_step(step)
+        if state.thinking_steps:
+            self._touch_panel("thinking-panel")
+
+        for tool in state.tool_statuses.values():
+            tool_panel.update_tool(tool)
+        if state.tool_statuses:
+            self._touch_panel("tool-panel")
+
+        for agent in state.active_agents:
+            agents_panel.update_agent(agent)
+        if state.active_agents:
+            self._touch_panel("agents-panel")
+
+        for panel in (thinking_panel, tool_panel, agents_panel):
+            panel.refresh_visibility()
+        self._relayout_panels()
+
+    # ── slash dropdown ────────────────────────────────────────────
+
     def get_dropdown_selection(self) -> str | None:
         """Return the currently-highlighted slash command, if the dropdown
         is open. Used by InputBar to resolve Enter-to-select instead of
@@ -153,27 +398,13 @@ class NexusTUI(App):
     def action_dismiss_dropdown(self) -> None:
         self._hide_dropdown()
 
-    def _on_state_change(self, state: TUIState) -> None:
-        self._update_status_bar()
-        chat_panel = self.query_one("#chat-panel", ChatPanel)
-        thinking_panel = self.query_one("#thinking-panel", ThinkingPanel)
-        tool_panel = self.query_one("#tool-panel", ToolPanel)
-        agents_panel = self.query_one("#agents-panel", AgentsPanel)
-
-        if state.messages:
-            last_msg = state.messages[-1]
-            if not chat_panel._messages or chat_panel._messages[-1] != last_msg:
-                chat_panel.add_message(last_msg)
-
-        for step in state.thinking_steps:
-            if step not in thinking_panel._steps:
-                thinking_panel.add_step(step)
-
-        for tool in state.tool_statuses.values():
-            tool_panel.update_tool(tool)
-
-        for agent in state.active_agents:
-            agents_panel.update_agent(agent)
+    def on_input_changed(self, event: Input.Changed) -> None:
+        value = event.value
+        if value.startswith("/"):
+            self._show_slash_dropdown(filter_text=value)
+        else:
+            if self._show_dropdown:
+                self._hide_dropdown()
 
     def _show_slash_dropdown(self, filter_text: str = ""):
         """Show the slash command dropdown with filter."""
@@ -198,7 +429,12 @@ class NexusTUI(App):
         existing = self.query("SlashCommandDropdown")
         if existing:
             existing.remove()
-        self.query_one("#command-input", Input).focus()
+        try:
+            self.query_one("#command-input", Input).focus()
+        except Exception:
+            pass
+
+    # ── commands / input ──────────────────────────────────────────
 
     def on_command_entered(self, event: CommandEntered) -> None:
         if event.command:
@@ -225,42 +461,27 @@ class NexusTUI(App):
         self.state_manager.state.messages = []
 
     def action_toggle_thinking(self) -> None:
-        panel = self.query_one("#thinking-panel", ThinkingPanel)
-        panel.toggle_class("hidden")
+        self.query_one("#thinking-panel", ThinkingPanel).toggle_visibility()
+        self._relayout_panels()
 
     def action_toggle_tools(self) -> None:
-        panel = self.query_one("#tool-panel", ToolPanel)
-        panel.toggle_class("hidden")
+        self.query_one("#tool-panel", ToolPanel).toggle_visibility()
+        self._relayout_panels()
 
     def action_toggle_agents(self) -> None:
-        panel = self.query_one("#agents-panel", AgentsPanel)
-        panel.toggle_class("hidden")
+        self.query_one("#agents-panel", AgentsPanel).toggle_visibility()
+        self._relayout_panels()
 
     def action_show_help(self) -> None:
         help_text = """
-╔══════════════════════════════════════════════════╗
-║  Nexus — Keyboard Shortcuts                     ║
-╠══════════════════════════════════════════════════╣
-║  Ctrl+P    Commands     Command palette          ║
-║  Ctrl+L    Clear        Clear chat               ║
-║  Ctrl+G    Thinking     Toggle thinking panel    ║
-║  Ctrl+T    Tools        Toggle tools panel       ║
-║  Ctrl+A    Agents       Toggle agents panel      ║
-║  F1        Help         Show this help           ║
-║  Escape    Dismiss      Dismiss popups           ║
-║                                                ║
-║  /help — Show help                              ║
-║  /clear — Clear chat                           ║
-║  /tools — List tools                           ║
-║  /model — Switch model                         ║
-║  /provider — Show provider info                ║
-║  /doctor — Run diagnostics                     ║
-║  /session — Session info                       ║
-║  /facts — Stored facts                         ║
-║  /voice — Voice mode                           ║
-║  /mcp — MCP servers                            ║
-║  /exit — Quit                                  ║
-╚══════════════════════════════════════════════════╝
+  Nexus — keys & commands
+  ───────────────────────
+  ctrl+p  command palette      ctrl+l  clear chat
+  ctrl+g  thinking panel       ctrl+t  tools panel
+  ctrl+a  agents panel         f1      this help
+
+  /help /clear /history /tools /model /provider
+  /session /facts /doctor /mcp /voice /exit
         """
         chat_panel = self.query_one("#chat-panel", ChatPanel)
         chat_panel.add_message(ChatMessage(
@@ -277,9 +498,20 @@ class NexusTUI(App):
         status_bar = self.query_one(StatusBar)
         from ..providers import get_manager
         mgr = get_manager()
-        status_bar.model = state.active_model or mgr.active_provider or ""
+        # Graceful "no provider": active_provider has a default name even
+        # when nothing is configured, so gate on configured providers.
+        if mgr.configs:
+            provider = mgr.active_provider
+            cfg = mgr.get_provider_config(provider)
+            model = state.active_model or (cfg.model if cfg else "")
+        else:
+            provider = ""
+            model = state.active_model or ""
+        status_bar.model = model
+        status_bar.provider = provider
         status_bar.project = os.path.basename(os.getcwd())
         status_bar.battery = self._get_battery()
+        status_bar.termux = self._termux_mode
         status_bar.refresh()
 
     def _get_battery(self) -> int:
@@ -301,6 +533,11 @@ class NexusTUI(App):
         args = parts[1] if len(parts) > 1 else ""
         chat_panel = self.query_one("#chat-panel", ChatPanel)
 
+        def system_msg(text: str) -> None:
+            chat_panel.add_message(ChatMessage(
+                role=MessageRole.SYSTEM, content=text, timestamp=datetime.now(),
+            ))
+
         if cmd in ("exit", "quit", "q"):
             self.exit()
             return True
@@ -318,9 +555,7 @@ class NexusTUI(App):
             text = "Recent commands:\n" + "\n".join(
                 f"  {i+1}. {c}" for i, c in enumerate(self._command_history[-10:])
             )
-            chat_panel.add_message(ChatMessage(
-                role=MessageRole.SYSTEM, content=text, timestamp=datetime.now(),
-            ))
+            system_msg(text)
             return True
 
         if cmd == "tools":
@@ -329,36 +564,23 @@ class NexusTUI(App):
             text = "Available tools:\n" + "\n".join(
                 f"  \u2219 {t.name}: {t.description}" for t in registry.list_all()
             )
-            chat_panel.add_message(ChatMessage(
-                role=MessageRole.SYSTEM, content=text, timestamp=datetime.now(),
-            ))
+            system_msg(text)
             return True
 
         if cmd == "model":
             if args:
                 self.state_manager.set_active_model(args)
-                chat_panel.add_message(ChatMessage(
-                    role=MessageRole.SYSTEM,
-                    content=f"Model set to: {args}",
-                    timestamp=datetime.now(),
-                ))
+                system_msg(f"Model set to: {args}")
             else:
                 state = self.state_manager.state
-                chat_panel.add_message(ChatMessage(
-                    role=MessageRole.SYSTEM,
-                    content=f"Current model: {state.active_model or 'not set'}",
-                    timestamp=datetime.now(),
-                ))
+                system_msg(f"Current model: {state.active_model or 'not set'}")
             return True
 
         if cmd == "provider":
             from ..providers import get_manager
             mgr = get_manager()
-            chat_panel.add_message(ChatMessage(
-                role=MessageRole.SYSTEM,
-                content=f"Active provider: {mgr.active_provider or 'none'}",
-                timestamp=datetime.now(),
-            ))
+            active = mgr.active_provider if mgr.configs else "none"
+            system_msg(f"Active provider: {active}")
             return True
 
         if cmd == "facts":
@@ -368,9 +590,7 @@ class NexusTUI(App):
             text = "Stored facts:\n" if facts else "No facts stored."
             if facts:
                 text += "\n".join(f"  \u2219 {k}: {v}" for k, v in facts.items())
-            chat_panel.add_message(ChatMessage(
-                role=MessageRole.SYSTEM, content=text, timestamp=datetime.now(),
-            ))
+            system_msg(text)
             return True
 
         if cmd == "session":
@@ -378,11 +598,7 @@ class NexusTUI(App):
             memory = get_memory()
             session = memory.create_session()
             self.state_manager.set_session(session.id)
-            chat_panel.add_message(ChatMessage(
-                role=MessageRole.SYSTEM,
-                content=f"Session: {session.id}\nCreated: {session.created_at}",
-                timestamp=datetime.now(),
-            ))
+            system_msg(f"Session: {session.id}\nCreated: {session.created_at}")
             return True
 
         if cmd == "doctor":
@@ -390,17 +606,20 @@ class NexusTUI(App):
             doctor = NexusDoctor()
             report = doctor.run_all()
 
-            lines = ["[bold cyan]NEXUS SYSTEM DIAGNOSTICS[/]", ""]
+            # Doctor output is plain text: the transcript renders message
+            # content without Rich markup parsing (so model output with
+            # brackets like List[int] survives), so no [bold]-style tags here.
+            lines = ["NEXUS SYSTEM DIAGNOSTICS", ""]
 
             # System vitals
             sys_data = report.get("system", {})
             if sys_data:
-                lines.append("[bold]SYSTEM[/]")
-                lines.append(f"  OS: [white]{sys_data.get('os', '?')}[/]")
-                lines.append(f"  Python: [white]{sys_data.get('python', '?')}[/]")
-                lines.append(f"  CPUs: [white]{sys_data.get('cpus', '?')}[/] cores")
-                lines.append(f"  Memory: [white]{sys_data.get('memory_total', '?')}[/]")
-                lines.append(f"  Disk: [white]{sys_data.get('disk_used', '?')} / {sys_data.get('disk_total', '?')}[/]")
+                lines.append("SYSTEM")
+                lines.append(f"  OS: {sys_data.get('os', '?')}")
+                lines.append(f"  Python: {sys_data.get('python', '?')}")
+                lines.append(f"  CPUs: {sys_data.get('cpus', '?')} cores")
+                lines.append(f"  Memory: {sys_data.get('memory_total', '?')}")
+                lines.append(f"  Disk: {sys_data.get('disk_used', '?')} / {sys_data.get('disk_total', '?')}")
                 lines.append("")
 
             # Component checks
@@ -414,7 +633,7 @@ class NexusTUI(App):
                 if passed:
                     passed_count += 1
 
-                status = "[green]\u2713[/]" if passed else "[red]\u2717[/]"
+                status = "\u2713" if passed else "\u2717"
                 label = category.replace("_", " ").upper()
 
                 detail = ""
@@ -437,9 +656,9 @@ class NexusTUI(App):
 
                 error = result.get("error")
                 if error:
-                    detail = f"  [red]{error}[/]"
+                    detail = f"  ✗ {error}"
 
-                lines.append(f"  {status} [bold]{label}[/]{detail}")
+                lines.append(f"  {status} {label}{detail}")
             lines.append("")
 
             # Health gauge
@@ -447,8 +666,7 @@ class NexusTUI(App):
             pct = passed_count / max(total, 1)
             filled = int(pct * 20)
             bar = "\u2588" * filled + "\u2591" * (20 - filled)
-            color = "green" if pct >= 0.8 else "yellow" if pct >= 0.5 else "red"
-            lines.append(f"Health: [{color}]{bar} {pct:.0%}[/]  ({passed_count}/{total} passed)")
+            lines.append(f"Health: {bar} {pct:.0%}  ({passed_count}/{total} passed)")
 
             chat_panel.add_message(ChatMessage(
                 role=MessageRole.SYSTEM,
@@ -458,22 +676,16 @@ class NexusTUI(App):
             return True
 
         if cmd == "mcp":
-            chat_panel.add_message(ChatMessage(
-                role=MessageRole.SYSTEM,
-                content="MCP: use /mcp list|add|remove",
-                timestamp=datetime.now(),
-            ))
+            system_msg("MCP: use /mcp list|add|remove")
             return True
 
         if cmd == "voice":
-            chat_panel.add_message(ChatMessage(
-                role=MessageRole.SYSTEM,
-                content="Voice mode: run 'nexus voice' from terminal",
-                timestamp=datetime.now(),
-            ))
+            system_msg("Voice mode: run 'nexus voice' from terminal")
             return True
 
         return False
+
+    # ── the turn loop ─────────────────────────────────────────────
 
     async def _process_input(self, user_input: str) -> None:
         if not user_input.strip():
@@ -485,91 +697,112 @@ class NexusTUI(App):
             return
 
         chat_panel = self.query_one("#chat-panel", ChatPanel)
-        chat_panel.add_message(ChatMessage(
+        user_msg = ChatMessage(
             role=MessageRole.USER,
             content=user_input,
             timestamp=datetime.now(),
-        ))
+        )
+        chat_panel.add_message(user_msg)
+        self.state_manager.record_message(user_msg)
 
         self.state_manager.set_busy(True)
+        self.state_manager.clear_thinking()
+        self._seen_thinking_steps = set()
 
         try:
-            from ..agent.orchestrator import AgentConfig, AgentOrchestrator
-            from ..memory import get_memory
-            from ..providers import get_manager
-            from ..tools import get_registry
+            self.state_manager.add_agent(self._agent_name, "orchestrator", model=None)
+            self.state_manager.update_agent_status(self._agent_name, AgentStatus.THINKING, "processing")
 
-            manager = get_manager()
-            registry = get_registry()
-            memory = get_memory()
-            config = AgentConfig(stream=True, verbose=False)
-            orchestrator = AgentOrchestrator(
-                provider_manager=manager,
-                tool_registry=registry,
-                memory=memory,
-                config=config,
-            )
+            # Singleton orchestrator (recon M2-1): same instance the
+            # ui_callback is wired to, so panels receive live events.
+            orchestrator = self.orchestrator
+            self.state_manager.state.max_context_tokens = orchestrator.config.max_context_tokens
 
-            self._current_assistant_message = None
+            self._stream_msg = None
 
             async def stream_callback(content: str):
-                if self._current_assistant_message is None:
-                    self._current_assistant_message = ChatMessage(
+                # Streaming only fires for no-tool turns (pm.stream refuses
+                # tools), so this renders tokens live when the plumbing
+                # allows it and is simply never called otherwise.
+                if self._stream_msg is None:
+                    self._stream_msg = ChatMessage(
                         role=MessageRole.ASSISTANT,
                         content=content,
                         timestamp=datetime.now(),
+                        streaming=True,
                     )
-                    chat_panel.add_message(self._current_assistant_message)
+                    chat_panel.add_message(self._stream_msg)
                 else:
-                    self._current_assistant_message.content += content
+                    self._stream_msg.content += content
+                    # Update just the last widget — no state fan-out per token.
                     widgets = chat_panel.query(ChatMessageWidget)
                     if widgets:
-                        widgets[-1].message = self._current_assistant_message
-                        widgets[-1].refresh()
-                self.state_manager.refresh()
+                        widgets[-1].refresh_content()
 
             turn = await orchestrator.run(user_input, stream_callback=stream_callback)
-            self.state_manager.refresh()
+
+            chat_panel.end_streaming(final_content=turn.assistant_message or None)
+            self._stream_msg = None
+            self.state_manager.set_turn_stats(
+                tokens_used=turn.tokens_used,
+                duration_ms=turn.duration_ms,
+                max_context_tokens=orchestrator.config.max_context_tokens,
+            )
 
             if turn.pending_approval:
                 self._handle_pending_approval(turn.pending_approval)
                 return
 
             if turn.assistant_message:
-                chat_panel.add_message(ChatMessage(
+                final_msg = ChatMessage(
                     role=MessageRole.ASSISTANT,
                     content=turn.assistant_message,
                     timestamp=datetime.now(),
-                ))
+                )
+                chat_panel.add_message(final_msg)
+                self.state_manager.record_message(final_msg)
             if turn.error:
                 self.state_manager.set_error(turn.error)
+                error_msg = ChatMessage(
+                    role=MessageRole.SYSTEM,
+                    content=f"Error: {turn.error}",
+                    timestamp=datetime.now(),
+                )
+                chat_panel.add_message(error_msg)
+                self.state_manager.record_message(error_msg)
+                self.state_manager.update_agent_status(self._agent_name, AgentStatus.ERROR, "turn failed")
+            else:
+                self.state_manager.update_agent_status(self._agent_name, AgentStatus.IDLE, None)
 
         except Exception as e:
-            chat_panel.add_message(ChatMessage(
+            error_msg = ChatMessage(
                 role=MessageRole.SYSTEM,
                 content=f"Error: {e}",
                 timestamp=datetime.now(),
-            ))
+            )
+            chat_panel.add_message(error_msg)
+            self.state_manager.record_message(error_msg)
             self.state_manager.set_error(str(e))
+            self.state_manager.update_agent_status(self._agent_name, AgentStatus.ERROR, "turn failed")
         finally:
             self.state_manager.set_busy(False)
 
     def _handle_pending_approval(self, approval: dict[str, Any]) -> None:
-        result = approval.get("result", {})
-        diff = result.get("metadata", {}).get("diff", "No diff available")
-        path = result.get("metadata", {}).get("path", "Unknown")
-        display = f"\n{'='*60}\nPROPOSED CHANGE: {path}\n{'='*60}\n{diff}"
+        result = approval.get("result")
+        # The orchestrator passes a ToolResult object here (not a dict).
+        metadata = getattr(result, "metadata", None) or {}
+        diff = metadata.get("diff", "No diff available")
+        path = metadata.get("path", "Unknown")
+        tool_name = approval.get("tool_name", "tool")
 
         chat_panel = self.query_one("#chat-panel", ChatPanel)
-        chat_panel.add_message(ChatMessage(
-            role=MessageRole.SYSTEM, content=display, timestamp=datetime.now(),
-        ))
-        chat_panel.add_message(ChatMessage(
-            role=MessageRole.SYSTEM,
-            content="Type 'approve' to apply, 'reject' to cancel.",
-            timestamp=datetime.now(),
-        ))
+        chat_panel.add_diff_message(
+            title=f"PROPOSED CHANGE — {path} ({tool_name})",
+            diff=str(diff),
+            body="Type 'approve' to apply, 'reject' to cancel.",
+        )
         self.state_manager.set_busy(False)
+
 
 def run_tui() -> None:
     """Run the TUI application."""

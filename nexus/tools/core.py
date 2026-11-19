@@ -1,6 +1,7 @@
 """Core tools for Nexus - filesystem, shell, web, and more."""
 
 import asyncio
+import difflib
 import os
 import subprocess
 from pathlib import Path
@@ -11,6 +12,37 @@ import httpx
 from ..utils import sanitize_error
 from .base import BaseTool, ToolDefinition, ToolRegistry, ToolResult
 from .diff_tool import InteractiveDiffTool
+
+# Cap on the unified diff embedded in edit/write tool results. The TUI
+# renders it as a colored diff block; uncapped diffs from huge rewrites
+# would flood both the transcript and the model's tool-result context.
+DIFF_CAP_LINES = 80
+
+
+def _capped_unified_diff(before: str, after: str, path: str, cap: int = DIFF_CAP_LINES) -> str:
+    """Standard unified diff between before/after text, capped at `cap` lines
+    with an explicit "... N more lines" marker when truncated."""
+    diff_lines = list(difflib.unified_diff(
+        before.splitlines(keepends=True),
+        after.splitlines(keepends=True),
+        fromfile=f"a/{path}",
+        tofile=f"b/{path}",
+    ))
+    if not diff_lines:
+        return ""
+    if len(diff_lines) <= cap:
+        return "".join(diff_lines)
+    shown = "".join(diff_lines[:cap])
+    if not shown.endswith("\n"):
+        shown += "\n"
+    return shown + f"... {len(diff_lines) - cap} more lines\n"
+
+
+def _append_diff(content: str, diff: str) -> str:
+    """Append a unified diff to a tool result string (if any)."""
+    if not diff:
+        return content
+    return f"{content}\n\n{diff}"
 
 
 class ReadTool(BaseTool):
@@ -89,13 +121,23 @@ class WriteTool(BaseTool):
             file_path = Path(path)
             file_path.parent.mkdir(parents=True, exist_ok=True)
 
+            # Snapshot the previous contents so the result can include a
+            # real unified diff (rendered by the TUI's tool-call card).
+            before = ""
+            if file_path.exists():
+                try:
+                    before = file_path.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    before = ""
+
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
 
+            diff = _capped_unified_diff(before, content, path)
             return ToolResult(
                 success=True,
-                content=f"File written successfully: {path}",
-                metadata={"bytes_written": len(content.encode("utf-8"))},
+                content=_append_diff(f"File written successfully: {path}", diff),
+                metadata={"bytes_written": len(content.encode("utf-8")), "diff": diff, "path": path},
             )
         except Exception as e:
             return ToolResult(success=False, content="", error=sanitize_error(e))
@@ -173,9 +215,11 @@ class EditTool(BaseTool):
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
+            diff = _capped_unified_diff(content, new_content, path)
             return ToolResult(
                 success=True,
-                content=f"Edit applied successfully to {path}",
+                content=_append_diff(f"Edit applied successfully to {path}", diff),
+                metadata={"diff": diff, "path": path},
             )
         except Exception as e:
             return ToolResult(success=False, content="", error=sanitize_error(e))

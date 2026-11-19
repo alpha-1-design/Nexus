@@ -36,3 +36,17 @@
 6.  **Testing:** Implement comprehensive unit and integration tests for the ReAct loop and tool interactions.
 
 The core engine is now dynamic and the UI is immersive. The project is in a solid state for further feature development and refinement.
+
+## 2026-11-19 Strike-Team Session — "Billion-Dollar Polish" Round
+
+Five subsystems rebuilt/fixed in parallel; **288 tests passing** (baseline 175).
+
+1. **Agent loop (M1 fixed):** real ReAct loop (max 8 tool rounds), streamed tool-call arguments accumulated correctly (`providers/base.py` `_StreamToolCallBuffer`), manager.stream supports tools with pre-emission fallback only, valid transcripts (assistant+tool_calls before role=tool), every turn persisted to history+session, `/abort` cooperative, `/model` awaits switch. Recon: download/NEXUS_RECON_FINDINGS.md has the full file:line receipts.
+2. **TUI v2:** Claude-Code-class — timestamps, collapsible tool cards, unified diff rendering (edit/write results emit diffs via tools/core.py), singleton orchestrator wiring fixed (panels go live), panels hide when empty, chat 1fr with min-height, status bar (model/provider/ctx/tokens/cwd), welcome card, streaming cursor. Known limitation: orchestrator only streams no-tool turns; approval flow still display-only.
+3. **Free providers + rotation + .env:** 9 free-tier providers registered with verified endpoints (Groq, OpenRouter, Cerebras, Gemini, Mistral, GitHub Models, HuggingFace, Cloudflare, Zhipu), 429/quota rotation with 120s cooldowns + `last_rotation_note`, `~/.nexus/.env` loader (stdlib parser, chmod 600, env-sourced keys never rewritten into config.json), auth wizard recommends Auto free rotation. FLAGGED: verify GitHub Models / Cloudflare / Zhipu endpoints + live 429 rotation on real devices.
+4. **/init:** deterministic project scanner → `NEXUS.md` (git, languages, manifests, build commands, repo map, conventions), backup-rotate on regen, injected into REPL + orchestrator prompts (4000-char cap), `nexus init` CLI subcommand, TUI autocomplete. Old `nexus init` scaffolding is shadowed — consider renaming to `nexus scaffold`.
+5. **Installers:** `install.sh` dispatcher → `install-termux.sh` / `install-laptop.sh` (flags: --with-browser, --dev, --uninstall). FLAGGED: venv + psutil source-build edge cases on real Termux.
+6. **Infra fixes:** memory facts.json/sessions now corrupt-tolerant + atomic writes (boot never blocks on truncated files).
+
+Remaining known debt (see NEXUS_RECON_FINDINGS.md M3–M6): MCP handshake swapped-args bug + adapter never registered, safety rules never match commands, GitTool shell=True injection, bash sandbox no-op, "semantic recall" still keyword LIKE, ~1,500 lines dead code (orchestrator/, circuit_breaker, voice stub), dashboard unauthenticated write route.
+

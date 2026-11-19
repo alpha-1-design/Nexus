@@ -18,7 +18,7 @@ from typing import Any
 
 import click
 
-from ..config import NexusConfig, ProviderConfig, save_config
+from ..config import NexusConfig, ProviderConfig, load_env, save_config, write_env_key
 
 # =============================================================================
 # Terminal styling utilities
@@ -220,10 +220,10 @@ PROVIDER_CATALOGUE: list[ProviderInfo] = [
     ProviderInfo(
         id="openrouter",
         name="OpenRouter",
-        tier="Budget",
+        tier="Free",
         speed="Moderate",
         quality="★★★★☆",
-        description="200+ models. Pay-per-token, many free options.",
+        description="Hundreds of models; many :free (ids rotate).",
         setup_url="https://openrouter.ai/keys",
         default_model="google/gemma-3-27b-it:free",
         env_vars=["OPENROUTER_API_KEY"],
@@ -275,6 +275,66 @@ PROVIDER_CATALOGUE: list[ProviderInfo] = [
         setup_url="https://ollama.ai",
         default_model="qwen2.5-coder:7b",
         badge_color="magenta",
+    ),
+    ProviderInfo(
+        id="cerebras",
+        name="Cerebras",
+        tier="Free",
+        speed="Instant",
+        quality="★★★★☆",
+        description="Wafer-scale inference — fastest available, free key.",
+        setup_url="https://cloud.cerebras.ai",
+        default_model="llama-3.3-70b",
+        env_vars=["CEREBRAS_API_KEY"],
+        badge_color="green",
+    ),
+    ProviderInfo(
+        id="github-models",
+        name="GitHub Models",
+        tier="Free",
+        speed="Moderate",
+        quality="★★★☆☆",
+        description="GPT/Llama via your GitHub token. Rate-limited free tier.",
+        setup_url="https://github.com/settings/tokens",
+        default_model="openai/gpt-4o-mini",
+        env_vars=["GITHUB_TOKEN"],
+        badge_color="green",
+    ),
+    ProviderInfo(
+        id="huggingface",
+        name="HuggingFace Router",
+        tier="Free",
+        speed="Moderate",
+        quality="★★★☆☆",
+        description="One token routes to all HF inference providers.",
+        setup_url="https://huggingface.co/settings/tokens",
+        default_model="meta-llama/Llama-3.3-70B-Instruct",
+        env_vars=["HF_TOKEN"],
+        badge_color="green",
+    ),
+    ProviderInfo(
+        id="cloudflare-workers-ai",
+        name="Cloudflare Workers AI",
+        tier="Free",
+        speed="Fast",
+        quality="★★★☆☆",
+        description="10k free neurons/day; needs account id + token.",
+        setup_url="https://dash.cloudflare.com/profile/api-tokens",
+        default_model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        env_vars=["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"],
+        badge_color="green",
+    ),
+    ProviderInfo(
+        id="zhipu",
+        name="Zhipu GLM",
+        tier="Free",
+        speed="Fast",
+        quality="★★★★☆",
+        description="GLM open platform — glm-4-flash is free.",
+        setup_url="https://open.bigmodel.cn",
+        default_model="glm-4-flash",
+        env_vars=["ZHIPUAI_API_KEY"],
+        badge_color="green",
     ),
 ]
 
@@ -354,6 +414,9 @@ class OnboardingManager:
         # Plugins & skills
         self.enable_plugins: bool = True
         self.enable_skills: bool = True
+
+        # Rotation
+        self.free_rotation: bool = False
 
         # State
         self._key_source: str = ""
@@ -503,6 +566,17 @@ class OnboardingManager:
         _step(3, TOTAL_STEPS, "Choose your AI provider")
 
         click.echo()
+        click.echo(
+            f"  {_c('⭐ RECOMMENDED — Auto (free rotation): Nexus rotates across every', 'green', bold=True)}"
+        )
+        click.echo(
+            f"  {_c('free provider you have a key for, so rate limits never stop you.', 'green', bold=True)}"
+        )
+        click.echo(
+            f"  {_c('Requires at least one free key (added below in ~30 seconds).', 'bright_black')}"
+        )
+
+        click.echo()
         click.echo(f"  {_c('Available providers:', 'white', bold=True)}")
 
         tiers = ["Free", "Budget", "Premium", "Local"]
@@ -521,26 +595,85 @@ class OnboardingManager:
                 speed = _c(p.speed, fg="bright_black")
                 click.echo(f"      {num} {name} {rating}  {speed}")
                 click.echo(f"           {_c(p.description, fg='bright_black')}")
+                if p.setup_url:
+                    click.echo(f"           {_c('key: ' + p.setup_url, fg='blue')}")
 
         click.echo()
         click.echo(
             f"  {_c('Enter the number of your choice', fg='bright_black')}  "
-            f"{_c('[default: 1 = OpenCode Zen]', fg='bright_black')}"
+            f"{_c('[default: 1 = Auto (free rotation)]', fg='bright_black')}"
         )
 
         choice = click.prompt(
             _c("  Provider", fg="cyan", bold=True),
-            type=click.IntRange(1, len(PROVIDER_CATALOGUE)),
+            type=click.IntRange(1, len(PROVIDER_CATALOGUE) + 1),
             default=1,
             show_default=False,
             prompt_suffix="",
         )
-        self.provider_info = PROVIDER_CATALOGUE[choice - 1]
+        if choice == 1:
+            self._choose_auto_free()
+            return
+
+        self.provider_info = PROVIDER_CATALOGUE[choice - 2]
         self.provider_id = self.provider_info.id
         self.model = self.provider_info.default_model
         self.base_url = _get_base_url(self.provider_id)
 
         _ok(f"Selected {_c(self.provider_info.name, bold=True)}")
+
+    def _choose_auto_free(self) -> None:
+        """Auto (free rotation): enable rotation across configured free providers."""
+        self.free_rotation = True
+        load_env()  # make sure fresh ~/.nexus/.env keys are visible
+        free_infos = [p for p in PROVIDER_CATALOGUE if p.tier == "Free" and p.id != "ollama"]
+        configured = [p for p in free_infos if self._detect_env_key(p)]
+
+        if not configured:
+            click.echo()
+            _warn("No free provider keys found yet — let's add one (takes ~30s).")
+            for idx, p in enumerate(free_infos, 1):
+                click.echo(
+                    f"    {_c(f'{idx:2d}.', 'bright_black')} {_c(p.name, bold=True):24s}  "
+                    f"{_c(p.setup_url, fg='blue')}"
+                )
+            click.echo()
+            choice = click.prompt(
+                _c("  Which free provider?", fg="cyan", bold=True),
+                type=click.IntRange(1, len(free_infos)),
+                default=1,
+                show_default=False,
+                prompt_suffix="",
+            )
+            info = free_infos[choice - 1]
+            self.provider_info = info
+            self.provider_id = info.id
+            self.model = info.default_model
+            self.base_url = _get_base_url(info.id)
+            key = click.prompt(
+                _c(f"  Paste your {info.name} API key", fg="cyan", bold=True),
+                hide_input=True,
+                default="",
+                show_default=False,
+                prompt_suffix="",
+            )
+            if key.strip():
+                self.api_key = key.strip()
+                self._key_source = "prompt"
+                write_env_key(info.env_vars[0], self.api_key)
+                _ok("Saved to ~/.nexus/.env — free rotation is ready")
+            else:
+                _warn("No key entered — rotation starts once you add one to ~/.nexus/.env")
+        else:
+            names = ", ".join(p.name for p in configured)
+            primary = configured[0]
+            self.provider_info = primary
+            self.provider_id = primary.id
+            self.model = primary.default_model
+            self.base_url = _get_base_url(primary.id)
+            self.api_key = self._detect_env_key(primary)
+            self._key_source = "env"
+            _ok(f"Free rotation enabled — {len(configured)} providers ready ({names})")
 
     # ============================================================
     # Step 4/10 — API key
@@ -589,6 +722,8 @@ class OnboardingManager:
                 self.api_key = key.strip()
                 self._key_source = "prompt"
                 _ok("Key recorded")
+                write_env_key(info.env_vars[0], self.api_key)
+                _ok("Saved to ~/.nexus/.env (chmod 600) — loaded automatically from now on")
                 break
             click.echo(
                 f"  {_c('Key cannot be empty. Press Ctrl+C to cancel.', 'yellow')}"
@@ -1015,6 +1150,10 @@ class OnboardingManager:
             f"  {_c('Provider', bold=True):20s} {_c(info.name, fg='cyan', bold=True)}"
         )
         click.echo(f"  {_c('Model', bold=True):20s} {_c(self.model, fg='white')}")
+        if self.free_rotation:
+            click.echo(
+                f"  {_c('Rotation', bold=True):20s} {_c('Auto (free providers)', fg='green', bold=True)}"
+            )
 
         if self.api_key:
             masked = (
@@ -1085,8 +1224,14 @@ class OnboardingManager:
             return
 
         p_type = info.id
-        if info.id in ("ollama", "opencode-zen"):
+        if info.id in ("ollama", "opencode-zen", "opencode-go"):
             p_type = "openai"
+
+        # Prompt-entered keys were already written to ~/.nexus/.env; env keys
+        # are already in the environment. Either way the key must never be
+        # persisted into config.json — mark it env-sourced.
+        key_env_var = info.env_vars[0] if info.env_vars else None
+        env_sourced = bool(self.api_key and key_env_var and self._key_source != "none")
 
         p_cfg = ProviderConfig(
             name=self.provider_id,
@@ -1096,11 +1241,13 @@ class OnboardingManager:
             base_url=self.base_url or "",
             max_tokens=self.max_tokens,
             temperature=self.temperature,
+            env_sourced=env_sourced,
         )
 
         self.config.providers = {self.provider_id: p_cfg}
         self.config.active_provider = self.provider_id
         self.config.first_run = False
+        self.config.free_rotation = self.free_rotation
         self.config.tool_profile = self.tool_profile
         self.config.search_provider = self.search_provider
 
@@ -1108,15 +1255,16 @@ class OnboardingManager:
         if self.user_name:
             self.config.user_name = self.user_name
 
-        # Search API keys
-        key_map = {
-            "exa": ("exa_api_key", self.search_api_key),
-            "tavily": ("tavily_api_key", self.search_api_key),
-            "brave": ("brave_api_key", self.search_api_key),
+        # Search API keys go to ~/.nexus/.env too (no plaintext in config.json;
+        # load_config() picks them up from the environment automatically).
+        search_env_map = {
+            "exa": "EXA_API_KEY",
+            "tavily": "TAVILY_API_KEY",
+            "brave": "BRAVE_API_KEY",
         }
-        attr, val = key_map.get(self.search_provider, ("", ""))
-        if attr and val:
-            setattr(self.config, attr, val)
+        search_env = search_env_map.get(self.search_provider)
+        if search_env and self.search_api_key:
+            write_env_key(search_env, self.search_api_key)
 
         save_config(self.config)
 
@@ -1190,6 +1338,11 @@ def _get_base_url(provider_id: str) -> str | None:
         "opencode-go": "https://opencode.ai/zen/go/v1",
         "ollama": os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
         "google": "https://generativelanguage.googleapis.com/v1beta",
+        "openrouter": "https://openrouter.ai/api/v1",
+        "cerebras": "https://api.cerebras.ai/v1",
+        "github-models": "https://models.github.ai/inference",
+        "huggingface": "https://router.huggingface.co/v1",
+        "zhipu": "https://open.bigmodel.cn/api/paas/v4",
     }
     return urls.get(provider_id)
 
@@ -1247,6 +1400,31 @@ def _get_models_for_provider(provider_id: str) -> list[dict[str, str]]:
         "opencode-zen": [
             {"name": "minimax-m2.5-free", "description": "Fast & free", "badge": "⭐ Recommended"},
             {"name": "kimi-k2.5", "description": "Alternative free model"},
+        ],
+        "opencode-go": [
+            {"name": "kimi-k2.5", "description": "Go-routed free model"},
+        ],
+        "cerebras": [
+            {"name": "llama-3.3-70b", "description": "Best overall", "badge": "⭐ Recommended"},
+            {"name": "llama3.1-8b", "description": "Lightning fast", "badge": "⚡ Speed"},
+            {"name": "qwen-3-32b", "description": "Qwen 3 32B"},
+        ],
+        "github-models": [
+            {"name": "openai/gpt-4o-mini", "description": "Fast & capable", "badge": "⭐ Recommended"},
+            {"name": "openai/gpt-4.1-mini", "description": "Newer mini generation"},
+            {"name": "meta/Llama-3.3-70B-Instruct", "description": "Open-weights 70B"},
+        ],
+        "huggingface": [
+            {"name": "meta-llama/Llama-3.3-70B-Instruct", "description": "Best overall", "badge": "⭐ Recommended"},
+            {"name": "Qwen/Qwen2.5-Coder-32B-Instruct", "description": "Code-specialised"},
+        ],
+        "cloudflare-workers-ai": [
+            {"name": "@cf/meta/llama-3.3-70b-instruct-fp8-fast", "description": "Best overall", "badge": "⭐ Recommended"},
+            {"name": "@cf/openai/gpt-oss-120b", "description": "OpenAI open-weights"},
+        ],
+        "zhipu": [
+            {"name": "glm-4-flash", "description": "Free workhorse", "badge": "⭐ Free"},
+            {"name": "glm-4.7-flash", "description": "Newer GLM Flash (free)"},
         ],
     }
     return catalogue.get(
@@ -1307,6 +1485,30 @@ def _test_connection(
         elif provider_id == "ollama":
             url = f"{base_url or 'http://localhost:11434'}/api/chat"
             payload = {"model": model, "messages": [{"role": "user", "content": "ping"}], "stream": False}
+        elif provider_id in ("openrouter", "cerebras", "huggingface", "zhipu", "opencode-zen", "opencode-go"):
+            base = base_url or {
+                "openrouter": "https://openrouter.ai/api/v1",
+                "cerebras": "https://api.cerebras.ai/v1",
+                "huggingface": "https://router.huggingface.co/v1",
+                "zhipu": "https://open.bigmodel.cn/api/paas/v4",
+                "opencode-zen": "https://opencode.ai/zen/v1",
+                "opencode-go": "https://opencode.ai/zen/go/v1",
+            }[provider_id]
+            url = f"{base}/chat/completions"
+            headers["Authorization"] = f"Bearer {api_key}"
+            payload = {"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 2}
+        elif provider_id == "github-models":
+            url = f"{base_url or 'https://models.github.ai/inference'}/chat/completions"
+            headers["Authorization"] = f"Bearer {api_key}"
+            payload = {"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 2}
+        elif provider_id == "cloudflare-workers-ai":
+            cf_base = base_url
+            if not cf_base:
+                account = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
+                cf_base = f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1"
+            url = f"{cf_base}/chat/completions"
+            headers["Authorization"] = f"Bearer {api_key}"
+            payload = {"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 2}
         else:
             return {"ok": False, "error": f"Unknown provider: {provider_id}"}
 

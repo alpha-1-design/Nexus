@@ -1,4 +1,8 @@
-"""Color scheme constants for the Nexus TUI."""
+"""Color scheme constants for the Nexus TUI.
+
+This is the single source of truth for colors used in Rich markup inside
+widgets; styles.css mirrors the same palette for layout chrome.
+"""
 
 CSS_COLORS = {
     "bg": "#05070a",
@@ -20,6 +24,10 @@ CSS_COLORS = {
     "system_message": "#64748b",
     "tool_call": "#3b82f6",
     "timestamp": "#475569",
+    # Unified diff rendering
+    "diff_add": "#34d399",
+    "diff_del": "#f87171",
+    "diff_meta": "#67e8f9",
     # Glow colors
     "cyan": "#00f2ff",
     "purple": "#7c3aed",

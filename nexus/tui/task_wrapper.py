@@ -5,7 +5,10 @@ Ensures that all orchestrator tasks report status to the TUI.
 
 import logging
 from collections.abc import Awaitable
+from datetime import datetime
 from typing import Any
+
+from .state import ChatMessage, MessageRole
 
 
 class OrchestrationTask:
@@ -21,8 +24,18 @@ class OrchestrationTask:
             self.tui.query_one("StatusBar").update(message="Brain: Ready.")
         except Exception as e:
             logging.error(f"Orchestration Error: {e}")
-            self.tui.query_one("StatusBar").update(message=f"Brain Error: {str(e)[:30]}...")
-            # Potentially trigger a visual alert in chat
-            self.tui.query_one("#chat-panel").add_message(f"SYSTEM ERROR: {e}")
-        finally:
-            pass
+            try:
+                self.tui.query_one("StatusBar").update(message=f"Brain Error: {str(e)[:30]}...")
+            except Exception:
+                pass  # never let the error path itself take the app down
+            # BUGFIX (recon M2-4): this used to pass a plain string to
+            # ChatPanel.add_message, which expects a ChatMessage — so the
+            # error handler itself crashed and the user saw nothing.
+            try:
+                self.tui.query_one("#chat-panel").add_message(ChatMessage(
+                    role=MessageRole.SYSTEM,
+                    content=f"SYSTEM ERROR: {e}",
+                    timestamp=datetime.now(),
+                ))
+            except Exception:
+                pass

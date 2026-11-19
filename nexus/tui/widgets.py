@@ -1,12 +1,24 @@
-"""Reusable widgets for the Nexus TUI."""
+"""Reusable widgets for the Nexus TUI.
+
+Design language: minimal chrome, information-dense transcript, dim metadata,
+one accent color per role. Icons are limited to ▸ ✓ ✗ ⟳ ● ○ ● style glyphs —
+no emoji clutter.
+"""
+
+import os
+import re
+from typing import Any
 
 from rich.markup import escape
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal, Vertical
+from textual.binding import Binding
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import Input, Static
 
+from .colors import CSS_COLORS
 from .state import (
     AgentInfo,
     AgentStatus,
@@ -15,75 +27,465 @@ from .state import (
     ThinkingStep,
     ToolInfo,
     ToolStatus,
+    get_state_manager,
 )
+
+# --- tiny inline markup for assistant text ---------------------------------
+# Content is rendered as a rich `Text` (never parsed as markup), so code-like
+# brackets such as `List[int]` survive rendering (a real past bug). We support
+# a deliberately tiny marker subset — **bold** and %%dim%% — and HIDE the
+# markers, styling just the enclosed text.
+_MARKUP_RE = re.compile(r"\*\*(.+?)\*\*|%%(.+?)%%", re.DOTALL)
+
+
+def apply_inline_markup(text: Text) -> Text:
+    """Return a Text with **bold** / %%dim%% markers replaced by styled runs."""
+    raw = str(text)
+    if not _MARKUP_RE.search(raw):
+        return text
+    rendered = Text()
+    pos = 0
+    for match in _MARKUP_RE.finditer(raw):
+        if match.start() > pos:
+            rendered.append(raw[pos:match.start()])
+        if match.group(1) is not None:
+            rendered.append(match.group(1), style="bold")
+        else:
+            rendered.append(match.group(2), style="dim")
+        pos = match.end()
+    if pos < len(raw):
+        rendered.append(raw[pos:])
+    return rendered
+
+
+ROLE_STYLES = {
+    MessageRole.USER: ("you", CSS_COLORS["user_message"]),
+    MessageRole.ASSISTANT: ("nexus", CSS_COLORS["assistant_message"]),
+    MessageRole.SYSTEM: ("sys", CSS_COLORS["system_message"]),
+    MessageRole.TOOL: ("tool", CSS_COLORS["tool_call"]),
+}
+ROLE_CSS_CLASS = {
+    MessageRole.USER: "role-user",
+    MessageRole.ASSISTANT: "role-assistant",
+    MessageRole.SYSTEM: "role-system",
+    MessageRole.TOOL: "role-tool",
+}
+
+TOOL_STATUS_ICONS = {
+    "pending": ("○", "dim"),
+    "running": ("⟳", CSS_COLORS["accent"]),
+    "done": ("✓", CSS_COLORS["success"]),
+    "error": ("✗", CSS_COLORS["error"]),
+}
+
+
+def _truncate(value: str, limit: int) -> str:
+    value = value.strip().replace("\n", " ⏎ ")
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
+
+def _summarize_target(args: dict[str, Any]) -> str:
+    """Pick the argument that best identifies what a tool call acts on."""
+    for key in ("path", "file_path", "filePath", "pattern", "command", "url", "query", "action"):
+        value = args.get(key)
+        if value:
+            return _truncate(str(value), 48)
+    for value in args.values():
+        if isinstance(value, str) and value:
+            return _truncate(value, 48)
+    return ""
+
+
+# --- unified diff rendering -------------------------------------------------
+
+def classify_diff_line(line: str) -> str:
+    """Classify a unified diff line into a render kind.
+
+    Returns one of: "meta" (---/+++/... markers), "hunk" (@@), "add", "del",
+    "ctx".
+    """
+    if line.startswith(("---", "+++")):
+        return "meta"
+    if line.startswith("..."):
+        return "meta"
+    if line.startswith("@@"):
+        return "hunk"
+    if line.startswith("+"):
+        return "add"
+    if line.startswith("-"):
+        return "del"
+    return "ctx"
+
+
+DIFF_STYLES = {
+    "meta": f"dim {CSS_COLORS['diff_meta']}",
+    "hunk": f"dim {CSS_COLORS['diff_meta']}",
+    "add": CSS_COLORS["diff_add"],
+    "del": CSS_COLORS["diff_del"],
+    "ctx": "dim",
+}
+
+
+def render_diff(diff_text: str) -> Text:
+    """Parse standard unified diff text into a colorized rich Text.
+
+    `+` lines green, `-` lines red, `@@`/`---`/`+++` dim cyan. Long lines wrap
+    naturally inside the surrounding Static, so no manual wrapping here.
+    """
+    text = Text()
+    for line in diff_text.splitlines() or [""]:
+        text.append(line, DIFF_STYLES[classify_diff_line(line)])
+        text.append("\n")
+    return text
+
+
+class DiffBlock(Static):
+    """Bordered block that renders a unified diff inside a tool card."""
+
+    def __init__(self, diff_text: str, **kwargs):
+        super().__init__(**kwargs)
+        self.diff_text = diff_text
+
+    def render(self) -> Text:
+        return render_diff(self.diff_text)
+
+
+# --- transcript --------------------------------------------------------------
 
 
 class ChatMessageWidget(Container):
-    """Displays a single chat message with atmospheric styling."""
+    """One transcript entry: role badge + dim HH:MM stamp + wrapped body, with
+    a left accent border color-coded per role."""
+
+    def __init__(self, message: ChatMessage, **kwargs):
+        super().__init__(**kwargs)
+        self.message = message
+        self._cursor_on = True
+
+    # Rich markup is safe here: only badge/stamp strings contain markup, and
+    # content is rendered as a Text object (brackets never parsed).
+    def _header_markup(self) -> str:
+        label, color = ROLE_STYLES.get(self.message.role, ROLE_STYLES[MessageRole.SYSTEM])
+        stamp = self.message.timestamp.strftime("%H:%M")
+        header = f"[bold {color}]{label}[/] [dim]{stamp}[/]"
+        if self.message.role == MessageRole.TOOL and not self.message.is_tool_card:
+            header += f" [dim]{escape(self.message.tool_name or '')}[/]"
+        return header
+
+    def _content_text(self) -> Text:
+        content = self.message.content or ""
+        if self.message.tool_name and not self.message.is_tool_card:
+            content = f"[{self.message.tool_name}] {content}"
+        for tc in self.message.tool_calls:
+            content += f"\n[tool call: {tc.get('name', 'unknown')}]"
+        text = Text(content)
+        text = apply_inline_markup(text)
+        if self.message.streaming and self._cursor_on:
+            text.append("▌", style=CSS_COLORS["accent"])
+        return text
+
+    # Kept for API compat with earlier revisions / external callers: returns
+    # the plain (never-markup-parsed) content string.
+    def _format_content(self) -> str:
+        return self._content_text().plain
+
+    def compose(self) -> ComposeResult:
+        yield Static(self._header_markup(), classes="msg-header")
+        yield Static(self._content_text(), classes="content")
+
+    def on_mount(self) -> None:
+        self.add_class(ROLE_CSS_CLASS.get(self.message.role, "role-system"))
+
+    def toggle_cursor(self) -> None:
+        """Blink the streaming cursor (driven by ChatPanel's interval)."""
+        self._cursor_on = not self._cursor_on
+        self.refresh_content()
+
+    def refresh_content(self) -> None:
+        try:
+            self.query_one(".content", Static).update(self._content_text())
+        except Exception:
+            pass  # not mounted yet — compose() will render fresh
+
+
+class ToolCardWidget(Container):
+    """Collapsible tool-call card in the transcript.
+
+    Collapsed: `▸ Edit src/foo.py ✓ 0.4s`. Enter (when focused) or click
+    expands to args summary, result excerpt and — for edit/write — the
+    unified diff.
+    """
+
+    can_focus = True
+    expanded = reactive(False)
+    BINDINGS = [Binding("enter", "toggle_expand", "Expand")]
 
     def __init__(self, message: ChatMessage, **kwargs):
         super().__init__(**kwargs)
         self.message = message
 
+    def _header_markup(self) -> str:
+        msg = self.message
+        arrow = "▾" if self.expanded else "▸"
+        name = (msg.tool_name or "tool").capitalize()
+        icon, color = TOOL_STATUS_ICONS.get(msg.tool_status or "running", TOOL_STATUS_ICONS["running"])
+        parts = [f"[dim]{arrow}[/] [bold]{escape(name)}[/]"]
+        target = _summarize_target(msg.tool_args)
+        if target:
+            parts.append(f"[dim]{escape(target)}[/]")
+        parts.append(f"[{color}]{icon}[/]")
+        if msg.tool_duration_ms is not None:
+            parts.append(f"[dim]{msg.tool_duration_ms / 1000:.1f}s[/]")
+        return " ".join(parts)
+
+    def _args_markup(self) -> str:
+        lines = []
+        for key, value in (self.message.tool_args or {}).items():
+            shown = _truncate(str(value), 120)
+            lines.append(f"[dim]{escape(str(key))}[/] {escape(shown)}")
+        return "\n".join(lines) if lines else "[dim]no arguments[/]"
+
+    def _result_markup(self) -> str:
+        if self.message.tool_error:
+            return f"[{CSS_COLORS['error']}]✗ {escape(_truncate(self.message.tool_error, 300))}[/]"
+        if self.message.tool_result:
+            excerpt = _truncate(self.message.tool_result, 400)
+            # Hide the raw diff from the excerpt — it gets its own block.
+            if self.message.tool_diff and self.message.tool_diff in excerpt:
+                excerpt = excerpt.replace(self.message.tool_diff, "").strip() or "(see diff below)"
+            return f"[dim]{escape(excerpt)}[/]"
+        return "[dim]…[/]"
+
     def compose(self) -> ComposeResult:
-        timestamp = self.message.timestamp.strftime("%H:%M:%S")
+        yield Static(self._header_markup(), classes="tool-card-header")
+        with Container(classes="tool-card-body"):
+            yield Static(self._args_markup(), classes="tool-card-args")
+            if self.message.tool_diff:
+                yield DiffBlock(self.message.tool_diff, classes="tool-card-diff")
+            yield Static(self._result_markup(), classes="tool-card-result")
 
-        if self.message.role == MessageRole.USER:
-            role_display = "[bold cyan]USER[/]"
-            prefix = "╼"
-        elif self.message.role == MessageRole.ASSISTANT:
-            role_display = "[bold purple]NEXUS[/]"
-            prefix = "╾"
-        elif self.message.role == MessageRole.SYSTEM:
-            role_display = "[dim]SYST[/]"
-            prefix = "•"
-        else:
-            role_display = "[bold blue]TOOL[/]"
-            prefix = "⚙"
+    def watch_expanded(self, expanded: bool) -> None:
+        self.set_class(expanded, "expanded")
+        try:
+            self.query_one(".tool-card-header", Static).update(self._header_markup())
+        except Exception:
+            pass
 
-        yield Horizontal(
-            Static(f"[dim]{timestamp}[/] {prefix} ", classes="timestamp"),
-            Static(role_display, classes="role"),
-            Static(self._format_content(), classes="content", markup=False),
-            classes="message-row",
-        )
+    def action_toggle_expand(self) -> None:
+        self.expanded = not self.expanded
 
-    def _format_content(self) -> str:
-        content = self.message.content
-        if self.message.tool_name:
-            content = f"[tool: {self.message.tool_name}] {content}"
-        if self.message.tool_calls:
-            for tc in self.message.tool_calls:
-                content += f"\n[tool call: {tc.get('name', 'unknown')}]"
-        return content
+    def on_click(self, event: events.Click) -> None:
+        self.focus()
+        self.action_toggle_expand()
+
+    def set_status(
+        self,
+        status: str,
+        result: str | None = None,
+        error: str | None = None,
+        duration_ms: int | None = None,
+        diff: str | None = None,
+    ) -> None:
+        """Live-update the card while/after the tool runs."""
+        msg = self.message
+        msg.tool_status = status
+        if result is not None:
+            msg.tool_result = result
+        if error is not None:
+            msg.tool_error = error
+        if duration_ms is not None:
+            msg.tool_duration_ms = duration_ms
+        if diff is not None:
+            msg.tool_diff = diff
+        try:
+            self.query_one(".tool-card-header", Static).update(self._header_markup())
+            self.query_one(".tool-card-result", Static).update(self._result_markup())
+        except Exception:
+            pass
+        if diff and not self.query(".tool-card-diff"):
+            try:
+                self.query_one(".tool-card-body").mount(DiffBlock(diff, classes="tool-card-diff"))
+            except Exception:
+                pass
 
 
-class ChatPanel(Vertical):
-    """Scrollable chat history panel."""
+class ChatPanel(VerticalScroll):
+    """The hero panel: scrollable chat transcript."""
 
     def __init__(self, messages: list[ChatMessage] | None = None, **kwargs):
         super().__init__(**kwargs)
         self._messages = messages or []
+        self._card_seq = 0
+        self._streaming_widget: ChatMessageWidget | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static("Chat History", classes="panel-header")
-        with Vertical(id="messages-container"):
-            pass
+        yield Vertical(id="messages-container")
+
+    def on_mount(self) -> None:
+        # Blink the streaming cursor while a message is being received.
+        self.set_interval(0.5, self._tick_cursor)
+
+    def _tick_cursor(self) -> None:
+        if self._streaming_widget is not None:
+            self._streaming_widget.toggle_cursor()
+
+    def _mount(self, widget: Container) -> None:
+        self.query_one("#messages-container").mount(widget)
+        self.call_after_refresh(self._scroll_to_end)
+
+    def _scroll_to_end(self) -> None:
+        self.scroll_end(animate=False)
 
     def add_message(self, message: ChatMessage) -> None:
         self._messages.append(message)
         widget = ChatMessageWidget(message)
-        self.query_one("#messages-container").mount(widget)
-        self.scroll_end()
+        if message.streaming:
+            self._streaming_widget = widget
+        self._mount(widget)
+
+    def add_tool_card(self, tool_name: str, args: dict[str, Any]) -> str:
+        """Mount a collapsed tool-call card. Returns its card id."""
+        self._card_seq += 1
+        card_id = f"tc{self._card_seq}"
+        msg = ChatMessage(
+            role=MessageRole.TOOL,
+            content="",
+            tool_name=tool_name,
+            tool_args=dict(args or {}),
+            tool_status="running",
+            card_id=card_id,
+        )
+        self._messages.append(msg)
+        self._mount(ToolCardWidget(msg, id=f"tool-card-{card_id}"))
+        return card_id
+
+    def update_tool_card(
+        self,
+        card_id: str,
+        status: str,
+        result: str | None = None,
+        error: str | None = None,
+        duration_ms: int | None = None,
+        diff: str | None = None,
+    ) -> None:
+        try:
+            widget = self.query_one(f"#tool-card-{card_id}", ToolCardWidget)
+        except Exception:
+            return  # card was cleared mid-run
+        widget.set_status(status, result=result, error=error, duration_ms=duration_ms, diff=diff)
+        self.call_after_refresh(self._scroll_to_end)
+
+    def add_diff_message(self, title: str, diff: str, body: str | None = None) -> None:
+        """System message pairing a heading with a rendered unified diff."""
+        self._mount(DiffMessageWidget(title, diff, body))
+
+    def end_streaming(self, final_content: str | None = None) -> None:
+        """Stop the blink and lock in the final assistant text."""
+        widget = self._streaming_widget
+        if widget is None:
+            return
+        self._streaming_widget = None
+        widget.message.streaming = False
+        if final_content:
+            widget.message.content = final_content
+        widget.refresh_content()
 
     def clear(self) -> None:
         self._messages = []
-        container = self.query_one("#messages-container")
-        container.remove_children()
+        self._streaming_widget = None
+        self._card_seq = 0
+        self.query_one("#messages-container").remove_children()
+
+
+class DiffMessageWidget(Container):
+    """Approval-flow message: heading + unified diff + optional instruction."""
+
+    def __init__(self, title: str, diff: str, body: str | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.title = title
+        self.diff = diff
+        self.body = body
+
+    def compose(self) -> ComposeResult:
+        yield Static(f"[bold {CSS_COLORS['warning']}]{escape(self.title)}[/]", classes="msg-header")
+        yield DiffBlock(self.diff)
+        if self.body:
+            yield Static(f"[dim]{escape(self.body)}[/]", classes="content")
+
+
+class WelcomeCard(Container):
+    """Boot-time session card: ASCII logo, version, quick tips."""
+
+    def __init__(self, version: str = "0.1.0", **kwargs):
+        super().__init__(**kwargs)
+        self.version = version
+
+    def compose(self) -> ComposeResult:
+        logo = r"""
+  ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗
+  ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝
+  ██╔██╗ ██║█████╗   ╚███╔╝ ██║   ██║███████╗
+  ██║╚██╗██║██╔══╝   ██╔██╗ ██║   ██║╚════██║
+  ██║ ╚████║███████╗██╔╝ ██╗╚██████╔╝███████║
+  ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝"""
+        yield Static(f"[bold {CSS_COLORS['accent']}]{logo}[/]", classes="welcome-logo")
+        yield Static(
+            f"[dim]v{self.version} · self-hosted neural coding agent[/]",
+            classes="welcome-sub",
+        )
+        yield Static(
+            "\n".join(
+                [
+                    f"[dim]›[/] [bold]/help[/] [dim]— every slash command[/]",
+                    f"[dim]›[/] [bold]ctrl+t[/] [dim]— live tool activity[/]",
+                    f"[dim]›[/] [bold]ctrl+g[/] [dim]— agent thinking[/]",
+                    f"[dim]›[/] [dim]just start typing — the CMD:> prompt is live[/]",
+                ]
+            ),
+            classes="welcome-tips",
+        )
+
+
+# --- side panels --------------------------------------------------------------
+
+
+class CollapsiblePanel(VerticalScroll):
+    """Side panel that hides entirely when empty and not pinned.
+
+    ctrl+g/t/a toggle: hides a visible panel, pins a hidden one. When content
+    arrives unpinned, the panel auto-shows until dismissed.
+    """
+
+    pinned = reactive(False)
+    dismissed = reactive(False)
+
+    def has_content(self) -> bool:
+        return False
+
+    @property
+    def should_show(self) -> bool:
+        if self.pinned:
+            return True
+        return self.has_content() and not self.dismissed
+
+    def refresh_visibility(self) -> None:
+        self.set_class(not self.should_show, "hidden")
+
+    def toggle_visibility(self) -> None:
+        if self.should_show:
+            self.pinned = False
+            self.dismissed = True
+        else:
+            self.pinned = True
+            self.dismissed = False
+        self.refresh_visibility()
 
 
 class ThinkingBlock(Container):
-    """A thinking step with expand/collapse."""
+    """A thinking step with expand/collapse (reactive watcher actually
+    collapses it — the original had no watcher and the toggle did nothing)."""
 
     expanded = reactive(True)
 
@@ -91,21 +493,42 @@ class ThinkingBlock(Container):
         super().__init__(**kwargs)
         self.step = step
 
+    def _header_markup(self) -> str:
+        arrow = "▾" if self.expanded else "▸"
+        icon, color = TOOL_STATUS_ICONS.get(self.step.status, TOOL_STATUS_ICONS["done"])
+        header = f"[dim]{arrow}[/] [{color}]{icon}[/] [dim]#{self.step.step_number}[/] "
+        header += escape(self.step.description)
+        if self.step.duration_ms is not None:
+            header += f" [dim]{self.step.duration_ms / 1000:.1f}s[/]"
+        return header
+
     def compose(self) -> ComposeResult:
-        icon = "▼" if self.expanded else "▶"
-        yield Horizontal(
-            Static(f"[bold cyan]{icon}[/] [dim]#{self.step.step_number}[/]", classes="step-number"),
-            Static(escape(self.step.description), classes="step-description"),
-        )
-        if self.expanded and self.step.details:
-            yield Static(f"   [dim]{escape(self.step.details)}[/]", classes="step-details")
+        yield Static(self._header_markup(), classes="step-header")
+        if self.step.details:
+            yield Static(f"[dim]{escape(self.step.details)}[/]", classes="step-details")
+
+    def watch_expanded(self, expanded: bool) -> None:
+        self.set_class(expanded, "expanded")
+        try:
+            self.query_one(".step-header", Static).update(self._header_markup())
+            self.query_one(".step-details", Static).display = expanded
+        except Exception:
+            pass
 
     def on_click(self) -> None:
         self.expanded = not self.expanded
-        self.refresh()
+
+    def refresh_step(self) -> None:
+        try:
+            self.query_one(".step-header", Static).update(self._header_markup())
+            details = self.query_one(".step-details", Static)
+            details.update(f"[dim]{escape(self.step.details)}[/]")
+            details.display = self.expanded and bool(self.step.details)
+        except Exception:
+            pass
 
 
-class ThinkingPanel(Vertical):
+class ThinkingPanel(CollapsiblePanel):
     """Panel showing structured thinking steps."""
 
     def __init__(self, **kwargs):
@@ -113,19 +536,40 @@ class ThinkingPanel(Vertical):
         self._steps: list[ThinkingStep] = []
 
     def compose(self) -> ComposeResult:
-        yield Static("Thinking", classes="panel-header")
-        with Vertical(id="thinking-container"):
+        yield Static("THINKING", classes="panel-header")
+        yield Vertical(id="thinking-container")
+
+    def has_content(self) -> bool:
+        return bool(self._steps)
+
+    def _update_header(self) -> None:
+        try:
+            self.query_one(".panel-header", Static).update(f"THINKING [dim]· {len(self._steps)}[/]")
+        except Exception:
             pass
 
-    def add_step(self, step: ThinkingStep) -> None:
+    def add_step(self, step: ThinkingStep) -> ThinkingBlock:
         self._steps.append(step)
         widget = ThinkingBlock(step)
         self.query_one("#thinking-container").mount(widget)
+        self._update_header()
+        return widget
+
+    def update_step(self, step_id: str, status: str, details: str | None = None, duration_ms: int | None = None) -> None:
+        for block in self.query(ThinkingBlock):
+            if block.step.step_id == step_id:
+                block.step.status = status
+                if details is not None:
+                    block.step.details = details
+                if duration_ms is not None:
+                    block.step.duration_ms = duration_ms
+                block.refresh_step()
+                return
 
     def clear(self) -> None:
         self._steps = []
-        container = self.query_one("#thinking-container")
-        container.remove_children()
+        self.query_one("#thinking-container").remove_children()
+        self._update_header()
 
 
 class ToolStatusWidget(Static):
@@ -136,18 +580,19 @@ class ToolStatusWidget(Static):
         self.tool = tool
 
     def render(self) -> str:
-        status_icon = {
-            ToolStatus.PENDING: "[dim]○[/]",
-            ToolStatus.RUNNING: "[bold cyan]◎[/]",
-            ToolStatus.DONE: "[bold green]●[/]",
-            ToolStatus.ERROR: "[bold red]✗[/]",
-        }.get(self.tool.status, "[?]")
+        icon_key = {
+            ToolStatus.PENDING: "pending",
+            ToolStatus.RUNNING: "running",
+            ToolStatus.DONE: "done",
+            ToolStatus.ERROR: "error",
+        }.get(self.tool.status, "pending")
+        icon, color = TOOL_STATUS_ICONS[icon_key]
 
         duration_str = f" [dim]{self.tool.duration_ms}ms[/]" if self.tool.duration_ms else ""
-        return f"{status_icon} {escape(self.tool.name)}{duration_str}"
+        return f"[{color}]{icon}[/] {escape(self.tool.name)}{duration_str}"
 
 
-class ToolPanel(Vertical):
+class ToolPanel(CollapsiblePanel):
     """Panel showing tool execution status."""
 
     def __init__(self, **kwargs):
@@ -155,25 +600,36 @@ class ToolPanel(Vertical):
         self._tools: dict[str, ToolInfo] = {}
 
     def compose(self) -> ComposeResult:
-        yield Static("Tools", classes="panel-header")
-        with Vertical(id="tools-container"):
-            pass
+        yield Static("TOOLS", classes="panel-header")
+        yield Vertical(id="tools-container")
+
+    def has_content(self) -> bool:
+        return bool(self._tools)
 
     def update_tool(self, tool: ToolInfo) -> None:
         self._tools[tool.name] = tool
         container = self.query_one("#tools-container")
 
+        # Update in place: remove()+remount with the same id races with the
+        # async removal and raises DuplicateIds.
         existing = container.query(f"#tool-{tool.name}")
         if existing:
-            existing.remove()
+            existing.first().tool = tool
+            existing.first().refresh()
+        else:
+            container.mount(ToolStatusWidget(tool, id=f"tool-{tool.name}"))
+        self._update_header()
 
-        widget = ToolStatusWidget(tool, id=f"tool-{tool.name}")
-        container.mount(widget)
+    def _update_header(self) -> None:
+        try:
+            self.query_one(".panel-header", Static).update(f"TOOLS [dim]· {len(self._tools)}[/]")
+        except Exception:
+            pass
 
     def clear(self) -> None:
         self._tools = {}
-        container = self.query_one("#tools-container")
-        container.remove_children()
+        self.query_one("#tools-container").remove_children()
+        self._update_header()
 
 
 class AgentCard(Static):
@@ -184,19 +640,19 @@ class AgentCard(Static):
         self.agent = agent
 
     def render(self) -> str:
-        status_icon = {
-            AgentStatus.IDLE: "[dim]💤[/]",
-            AgentStatus.THINKING: "[bold cyan]🧠[/]",
-            AgentStatus.TOOL_USE: "[bold yellow]🛠️[/]",
-            AgentStatus.WAITING: "[dim]⏳[/]",
-            AgentStatus.ERROR: "[bold red]⚠️[/]",
-        }.get(self.agent.status, "?")
+        icon, color = {
+            AgentStatus.IDLE: ("○", "dim"),
+            AgentStatus.THINKING: ("⟳", CSS_COLORS["accent"]),
+            AgentStatus.TOOL_USE: ("▸", CSS_COLORS["warning"]),
+            AgentStatus.WAITING: ("◐", CSS_COLORS["text_dim"]),
+            AgentStatus.ERROR: ("✗", CSS_COLORS["error"]),
+        }.get(self.agent.status, ("○", "dim"))
 
-        model_str = f" [dim]({escape(self.agent.model)})[/]" if self.agent.model else ""
-        return f"{status_icon} {escape(self.agent.name)}{model_str}"
+        task = f" [dim]{escape(_truncate(self.agent.current_task or '', 40))}[/]" if self.agent.current_task else ""
+        return f"[{color}]{icon}[/] [bold]{escape(self.agent.name)}[/]{task}"
 
 
-class AgentsPanel(Vertical):
+class AgentsPanel(CollapsiblePanel):
     """Panel showing active agents."""
 
     def __init__(self, **kwargs):
@@ -204,9 +660,11 @@ class AgentsPanel(Vertical):
         self._agents: list[AgentInfo] = []
 
     def compose(self) -> ComposeResult:
-        yield Static("Agents", classes="panel-header")
-        with Vertical(id="agents-container"):
-            pass
+        yield Static("AGENTS", classes="panel-header")
+        yield Vertical(id="agents-container")
+
+    def has_content(self) -> bool:
+        return bool(self._agents)
 
     def update_agent(self, agent: AgentInfo) -> None:
         found = False
@@ -220,17 +678,25 @@ class AgentsPanel(Vertical):
             self._agents.append(agent)
 
         container = self.query_one("#agents-container")
+        # Update in place (see ToolPanel.update_tool for why not remount).
         existing = container.query(f"#agent-{agent.name}")
         if existing:
-            existing.remove()
+            existing.first().agent = agent
+            existing.first().refresh()
+        else:
+            container.mount(AgentCard(agent, id=f"agent-{agent.name}"))
+        self._update_header()
 
-        widget = AgentCard(agent, id=f"agent-{agent.name}")
-        container.mount(widget)
+    def _update_header(self) -> None:
+        try:
+            self.query_one(".panel-header", Static).update(f"AGENTS [dim]· {len(self._agents)}[/]")
+        except Exception:
+            pass
 
     def clear(self) -> None:
         self._agents = []
-        container = self.query_one("#agents-container")
-        container.remove_children()
+        self.query_one("#agents-container").remove_children()
+        self._update_header()
 
 
 class ProgressBar(Static):
@@ -238,9 +704,6 @@ class ProgressBar(Static):
 
     percent = reactive(0.0)
     width = 20
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
 
     def render(self) -> str:
         filled = int(self.percent / 100 * self.width)
@@ -264,7 +727,7 @@ class LoadingIndicator(Static):
 
 
 class InputBar(Container):
-    """Command input bar with history and completion."""
+    """Command input bar with history, completion and a dim keybind hint."""
 
     input_value = reactive("")
     history_index = reactive(-1)
@@ -275,11 +738,16 @@ class InputBar(Container):
         self._history_position = 0
 
     def compose(self) -> ComposeResult:
-        yield Static("CMD:>", classes="prompt")
-        yield Input(
-            placeholder="Type a message or /help for commands...",
-            id="command-input",
-            classes="input-field",
+        with Horizontal(classes="input-row"):
+            yield Static("CMD:>", classes="prompt")
+            yield Input(
+                placeholder="Ask anything… /help for commands",
+                id="command-input",
+                classes="input-field",
+            )
+        yield Static(
+            f"[dim]ctrl+t[/] tools  [dim]ctrl+g[/] thinking  [dim]ctrl+a[/] agents  [dim]ctrl+l[/] clear  [dim]ctrl+p[/] commands",
+            classes="input-hint",
         )
 
     def on_mount(self) -> None:
@@ -362,6 +830,7 @@ class SlashCommandDropdown(Container):
 
     COMMANDS: list[tuple[str, str]] = [
         ("/help", "Show help"),
+        ("/init", "Scan this project and generate NEXUS.md context"),
         ("/clear", "Clear chat history"),
         ("/history", "Show command history"),
         ("/tools", "List available tools"),
@@ -443,18 +912,23 @@ class SystemMonitor(Horizontal):
         self._refresh_metrics()
 
     def _refresh_metrics(self):
-        import os
         import random
 
         from ..providers import get_manager
 
         # Provider status (works even without provider)
         manager = get_manager()
-        provider_name = manager.active_provider or "none"
-        provider_status = f"CORE: {provider_name}" if provider_name != "none" else "CORE: initializing"
+        if manager.configs:
+            provider_name = manager.active_provider or "none"
+            provider_status = f"CORE: {provider_name}"
+        else:
+            provider_status = "CORE: offline"
 
         # System info
-        load = os.getloadavg()[0] if hasattr(os, 'getloadavg') else random.uniform(0.5, 3.0)
+        try:
+            load = os.getloadavg()[0]
+        except (AttributeError, OSError):
+            load = random.uniform(0.5, 3.0)
         mem_info = ""
         try:
             with open("/proc/meminfo") as f:
@@ -466,17 +940,21 @@ class SystemMonitor(Horizontal):
         except Exception:
             mem_info = "RAM: —"
 
+        state = get_state_manager().state
+        activity = "busy" if state.is_busy else "idle"
+        activity_color = CSS_COLORS["accent"] if state.is_busy else "dim"
+
         self._metrics = [
             provider_status,
             f"LOAD: {load:.1f}",
             mem_info,
+            f"[{activity_color}]● {activity}[/]",
         ]
 
         widgets = list(self.children)
-        if len(widgets) >= len(self._metrics):
-            for i, text in enumerate(self._metrics):
-                if i < len(widgets):
-                    widgets[i].update(text)
+        for i, text in enumerate(self._metrics):
+            if i < len(widgets):
+                widgets[i].update(text)
 
     def compose(self) -> ComposeResult:
         for _ in range(4):
@@ -484,20 +962,21 @@ class SystemMonitor(Horizontal):
 
 
 class StatusBar(Static):
-    """Bottom status bar with system info."""
+    """Bottom status line: pulse dot · model · provider · context % · tokens · cwd."""
 
-    def __init__(self, version: str = "0.1.0", model: str = "", project: str = "", termux: bool = False, battery: int = 100, **kwargs):
+    def __init__(self, version: str = "0.1.0", model: str = "", provider: str = "", project: str = "", termux: bool = False, battery: int = 100, **kwargs):
         super().__init__(**kwargs)
         self.version = version
         self.model = model
+        self.provider = provider
         self.project = project
         self.termux = termux
         self.battery = battery
         self.message = ""
+        self._pulse_state = 0
 
     def on_mount(self):
         self.set_interval(0.5, self._pulse)
-        self._pulse_state = 0
 
     def _pulse(self):
         self._pulse_state = (self._pulse_state + 1) % 4
@@ -507,52 +986,40 @@ class StatusBar(Static):
         self.message = message
         self.refresh()
 
+    @staticmethod
+    def _fmt_tokens(n: int) -> str:
+        if n >= 1000:
+            return f"{n / 1000:.1f}k"
+        return str(n)
+
     def render(self) -> str:
-        pulse = "◉" if self._pulse_state < 2 else "◎"
-        parts = [f"{pulse} nexus v{self.version}"]
+        state = get_state_manager().state
+        pulse = "●" if self._pulse_state < 2 else "◌"
+        pulse_color = CSS_COLORS["accent"] if state.is_busy else CSS_COLORS["text_dim"]
+
+        parts = [f"[{pulse_color}]{pulse}[/] [dim]nexus[/]"]
+        # model • provider, graceful "no provider" state
         if self.model:
-            parts.append(f"model: {self.model}")
+            parts.append(f"[bold]{self.model}[/]")
         else:
-            # Always show something even without provider — feels alive
-            from ..providers import get_manager
-            mgr = get_manager()
-            if mgr.active_provider:
-                parts.append(f"provider: {mgr.active_provider}")
-            else:
-                parts.append("status: initializing")
-        if self.project:
-            parts.append(f"project: {self.project}")
-        if self.termux:
-            parts.append("mobile")
-        if self.battery >= 0:
-            pct = self.battery
-            icon = "●" if pct > 50 else "◉" if pct > 20 else "○"
-            parts.append(f"{icon} {pct}%")
-        return "  ".join(parts)
+            parts.append("[dim]no model[/]")
+        parts.append(f"[dim]{self.provider or 'no provider'}[/]")
 
+        # context-used %
+        if state.max_context_tokens > 0 and state.context_tokens > 0:
+            pct = min(1.0, state.context_tokens / state.max_context_tokens)
+            color = CSS_COLORS["success"] if pct < 0.7 else CSS_COLORS["warning"] if pct < 0.9 else CSS_COLORS["error"]
+            parts.append(f"[{color}]ctx {pct:.0%}[/]")
+        if state.total_tokens:
+            parts.append(f"[dim]{self._fmt_tokens(state.total_tokens)} tok[/]")
 
-class Heartbeat(Static):
-    """Pulsing indicator for Nexus activity."""
+        cwd = self.project or os.path.basename(os.getcwd())
+        parts.append(f"[dim]{cwd}[/]")
 
-    def on_mount(self) -> None:
-        self.set_interval(0.8, self.update_pulse)
-        self.pulse = 0
-        self.chars = ["▱▱▱▱", "▰▱▱▱", "▰▰▱▱", "▰▰▰▱", "▰▰▰▰", "▱▰▰▰", "▱▱▰▰", "▱▱▱▰"]
+        if self.termux and self.battery >= 0:
+            icon = "●" if self.battery > 50 else "◐" if self.battery > 20 else "○"
+            parts.append(f"{icon} {self.battery}%")
+        if self.message:
+            parts.append(f"[dim]{escape(self.message)}[/]")
 
-    def update_pulse(self) -> None:
-        self.pulse = (self.pulse + 1) % len(self.chars)
-        self.update(f"[bold cyan]NEURAL:{self.chars[self.pulse]}[/]")
-
-
-class Telemetry(Static):
-    """Live status display for system and steward metrics."""
-
-    def on_mount(self) -> None:
-        self.set_interval(2.0, self.update_metrics)
-        self._load = 3
-
-    def update_metrics(self) -> None:
-        import random
-
-        self._load = max(1, min(99, self._load + random.randint(-5, 5)))
-        self.update(f"[telemetry-item]MESH-LOAD: {self._load}% | STEWARD: READY[/]")
+        return f" [dim]·[/] ".join(parts)

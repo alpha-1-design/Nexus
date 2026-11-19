@@ -129,6 +129,14 @@ class AgentOrchestrator:
         self._tool_call_count = 0
         self._messages: list[Message] = []
         self._history: list[Turn] = []
+
+        # Seed the transcript with generated project context (NEXUS.md) so
+        # every turn knows the workspace even before any tool runs.
+        _project_ctx = self._load_project_context()
+        if _project_ctx:
+            self._messages.append(
+                Message(role="system", content="### PROJECT CONTEXT (NEXUS.md)\n" + _project_ctx)
+            )
         self._thinking = get_thinking_engine()
         self._thinking_callback = None
         self._ui_callback: Callable[[str, Any], None] | None = None  # UI Bridge
@@ -209,8 +217,20 @@ class AgentOrchestrator:
         """Get the current team."""
         return self._team
 
+    def _load_project_context(self) -> str | None:
+        """Read NEXUS.md from the workspace (capped) for system-prompt context."""
+        try:
+            from ..project import load_nexus_md
+
+            return load_nexus_md(Path.cwd())
+        except Exception:
+            return None
+
     def set_system_prompt(self, prompt: str) -> None:
         """Set or update the system prompt."""
+        project_ctx = self._load_project_context()
+        if project_ctx:
+            prompt = prompt + "\n\n### PROJECT CONTEXT (NEXUS.md)\n" + project_ctx
         self._messages = [Message(role="system", content=prompt)]
         if self.config.system_prompt:
             self._messages[0] = Message(role="system", content=self.config.system_prompt + "\n\n" + prompt)
