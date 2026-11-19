@@ -320,6 +320,7 @@ from nexus.tui.state import (
 from nexus.tui.widgets import (
     ChatMessageWidget,
     DiffBlock,
+    SPINNER_FRAMES,
     ThinkingPanel,
     ToolCardWidget,
     WelcomeCard,
@@ -433,7 +434,9 @@ class TestToolCardWidget:
     def test_running_and_error_icons(self):
         running = self._card()
         running.message.tool_status = "running"
-        assert "⟳" in running._header_markup()
+        # The running glyph is animated (spinner frames, not a static ⟳).
+        spinner_glyphs = set(SPINNER_FRAMES["braille"]) | {"⟳"}
+        assert any(g in running._header_markup() for g in spinner_glyphs)
         failed = self._card()
         failed.message.tool_status = "error"
         assert "✗" in failed._header_markup()
@@ -488,7 +491,8 @@ class TestToolCardWidget:
     def test_set_status_updates_header(self):
         card = self._card()
         card.message.tool_status = "running"
-        assert "⟳" in card._header_markup()
+        spinner_glyphs = set(SPINNER_FRAMES["braille"]) | {"⟳"}
+        assert any(g in card._header_markup() for g in spinner_glyphs)
         card.set_status("error", error="File not found", duration_ms=50)
         assert card.message.tool_status == "error"
         assert "✗" in card._header_markup()
@@ -659,6 +663,9 @@ class TestChatPanelStreaming:
             panel.add_message(msg)
             await pilot.pause()
             assert panel._streaming_widget is not None
+            # The 0.5s blink timer can fire during a pause and flip the
+            # cursor — pin it ON before asserting the visible-cursor state.
+            panel._streaming_widget._cursor_on = True
             before = str(panel._streaming_widget._content_text())
             assert "▌" in before
 

@@ -42,18 +42,79 @@ def _draw_progress_bar(current: int, total: int, width: int = 16) -> str:
     return f"[{bar}] {_color_text(f'{pct:2d}%', color, bold=True)}"
 
 
-def get_logo():
-    """Return the Nexus ASCII logo in cyan."""
-    c = "\033[36m"
+def _load_tui_colors():
+    """Load nexus/tui/colors.py without executing the `nexus.tui` package
+    __init__ (which imports Textual — an *optional* dependency the REPL must
+    not require). colors.py is dependency-free, so a direct spec load keeps
+    the theme table as the single source of truth on every install shape.
+    Returns None when the file can't be loaded (callers fall back to cyan).
+    """
+    import importlib.util
+
+    try:  # cheap path first: colors.py standalone, no package init
+        path = Path(__file__).resolve().parent.parent / "tui" / "colors.py"
+        spec = importlib.util.spec_from_file_location("_nexus_tui_colors", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        pass
+    try:  # installed-package path (pulls nexus.tui.__init__, needs textual)
+        from ..tui import colors as module
+
+        return module
+    except Exception:
+        return None
+
+
+def _load_tui_settings():
+    """Load nexus/tui/settings.py the same standalone way (it reads
+    ~/.nexus/settings.json and imports nothing heavy at module level)."""
+    import importlib.util
+
+    try:
+        path = Path(__file__).resolve().parent.parent / "tui" / "settings.py"
+        spec = importlib.util.spec_from_file_location("_nexus_tui_settings", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        return None
+
+
+def get_logo(color: str | None = None, provider: str | None = None) -> str:
+    """Return the Nexus ASCII logo, tinted to the active identity.
+
+    Resolution order: explicit `color` (hex or ready ANSI sequence) → the
+    connected provider's brand color → the persisted TUI theme's `logo_tint`
+    token → classic cyan. A provider overrides the theme in every palette,
+    matching the TUI welcome card's behavior.
+    """
+    tui_colors = _load_tui_colors()
+    ansi = ""
+    if color:
+        ansi = color if color.startswith("\033") else (tui_colors.hex_to_ansi24(color) if tui_colors else "")
+    elif provider and tui_colors:
+        ansi = tui_colors.hex_to_ansi24(tui_colors.get_provider_brand_color(provider))
+    if not ansi and tui_colors:
+        try:
+            settings_mod = _load_tui_settings()
+            theme_name = settings_mod.get_settings().theme if settings_mod else ""
+            tokens = tui_colors.THEMES.get(theme_name) or tui_colors.THEMES.get(tui_colors.DEFAULT_THEME, {})
+            ansi = tui_colors.hex_to_ansi24(tokens.get("logo_tint", "#00f2ff"))
+        except Exception:
+            ansi = ""
+    if not ansi:
+        ansi = "\033[36m"
     r = "\033[0m"
-    return f"""{c}
-   {r}   ███╗   ██╗{c}███████╗{r}██╗  ██╗{c}██╗   ██╗{r}███████╗{c}{r}
-   {r}   ████╗  ██║{c}██╔════╝{r}╚██╗██╔╝{c}██║   ██║{r}██╔════╝{c}{r}
-   {r}   ██╔██╗ ██║{c}█████╗  {r} ╚███╔╝ {c}██║   ██║{r}███████╗{c}{r}
-   {r}   ██║╚██╗██║{c}██╔══╝  {r} ██╔██╗ {c}██║   ██║{r}╚════██║{c}{r}
-   {r}   ██║ ╚████║{c}███████╗{r}██╔╝ ██╗{c}╚██████╔╝{r}███████║{c}{r}
-   {r}   ╚═╝  ╚═══╝{c}╚══════╝{r}╚═╝  ╚═╝{c} ╚═════╝ {r}╚══════╝{c}{r}
-{c}                      ∞  N E U R A L   O S  ∞{r}"""
+    return f"""{ansi}
+   {r}   ███╗   ██╗{ansi}███████╗{r}██╗  ██╗{ansi}██╗   ██╗{r}███████╗{ansi}{r}
+   {r}   ████╗  ██║{ansi}██╔════╝{r}╚██╗██╔╝{ansi}██║   ██║{r}██╔════╝{ansi}{r}
+   {r}   ██╔██╗ ██║{ansi}█████╗  {r} ╚███╔╝ {ansi}██║   ██║{r}███████╗{ansi}{r}
+   {r}   ██║╚██╗██║{ansi}██╔══╝  {r} ██╔██╗ {ansi}██║   ██║{r}╚════██║{ansi}{r}
+   {r}   ██║ ╚████║{ansi}███████╗{r}██╔╝ ██╗{ansi}╚██████╔╝{r}███████║{ansi}{r}
+   {r}   ╚═╝  ╚═══╝{ansi}╚══════╝{r}╚═╝  ╚═╝{ansi} ╚═════╝ {r}╚══════╝{ansi}{r}
+{ansi}                      ∞  N E U R A L   O S  ∞{r}"""
 
 
 def _render_subsystem(name: str, label: str, duration: float = 0.6):

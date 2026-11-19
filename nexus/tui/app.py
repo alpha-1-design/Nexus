@@ -22,6 +22,9 @@ from textual.widgets import Input
 
 from ..agent import get_orchestrator
 from ..thinking import get_thinking_engine
+from .colors import apply_theme, cycle_theme, get_current_theme, on_theme_change, THEME_NAMES
+from .settings import get_load_notes, get_settings, save_settings_now
+from .settings_screen import SettingsModal
 from .state import (
     AgentStatus,
     ChatMessage,
@@ -31,6 +34,7 @@ from .state import (
 from .task_wrapper import OrchestrationTask
 from .widgets import (
     AgentsPanel,
+    BootChecklist,
     ChatMessageWidget,
     ChatPanel,
     CommandEntered,
@@ -129,7 +133,12 @@ class NexusTUI(App):
         Binding("ctrl+g", "toggle_thinking", "Thinking"),
         Binding("ctrl+t", "toggle_tools", "Tools"),
         Binding("ctrl+a", "toggle_agents", "Agents"),
-        Binding("escape", "dismiss_dropdown", "Dismiss", priority=True),
+        Binding("ctrl+s", "open_settings", "Settings"),
+        # Deliberately NOT priority: a priority app binding would swallow Esc
+        # while a modal screen (settings) is open, so its own Esc-to-close
+        # could never fire. Namespace order (focused → screen → app) already
+        # dismisses the slash dropdown when no modal is on top.
+        Binding("escape", "dismiss_dropdown", "Dismiss"),
         Binding("f1", "show_help", "Help"),
     ]
 
@@ -251,6 +260,14 @@ class NexusTUI(App):
     def on_mount(self) -> None:
         self.query_one("#command-input", Input).focus()
         self.state_manager.subscribe(self._on_state_change)
+        # Live theme swaps re-render the transcript + identity card; the
+        # unsubscribe handle keeps a closed app from staying registered.
+        self._theme_unsubscribe = on_theme_change(self._on_theme_applied)
+
+        # Apply the persisted theme BEFORE anything renders its first markup
+        # (widget colors resolve from the live token map at render time).
+        settings = get_settings()
+        apply_theme(settings.theme)
 
         import threading
 
@@ -262,13 +279,30 @@ class NexusTUI(App):
             self.shadow_indexer = None  # optional subsystem
 
         chat_panel = self.query_one("#chat-panel", ChatPanel)
+        # Agentic order of service: the subsystem checklist prints one line
+        # at a time ABOVE the welcome card (see BootChecklist).
+        chat_panel.query_one("#messages-container").mount(BootChecklist())
         chat_panel.query_one("#messages-container").mount(WelcomeCard(version=self._version))
+        self._restore_pinned_panels(settings)
         self._update_status_bar()
+
+        # Tolerant settings load may have ignored unknown keys / reset a
+        # corrupt file — say so once instead of silently swallowing it.
+        notes = get_load_notes()
+        if notes:
+            chat_panel.add_message(ChatMessage(
+                role=MessageRole.SYSTEM,
+                content="Settings notes:\n" + "\n".join(f"  ∙ {n}" for n in notes),
+                timestamp=datetime.now(),
+            ))
 
     def on_unmount(self) -> None:
         """Detach from the process-global singletons. Without this, a closed
         app instance stays subscribed: the next notification hits query_one()
         on an unmounted app and crashes whoever mutated state next."""
+        if getattr(self, "_theme_unsubscribe", None):
+            self._theme_unsubscribe()
+            self._theme_unsubscribe = None
         try:
             self.state_manager._listeners.remove(self._on_state_change)
         except (ValueError, AttributeError):
@@ -472,15 +506,76 @@ class NexusTUI(App):
         self.query_one("#agents-panel", AgentsPanel).toggle_visibility()
         self._relayout_panels()
 
+    # ── settings + themes (live, persistent) ──────────────────────
+
+    def action_open_settings(self) -> None:
+        """ctrl+s / `/settings`: keyboard-first settings modal."""
+        self.push_screen(SettingsModal(on_change=self._apply_live_settings))
+
+    def _restore_pinned_panels(self, settings) -> None:
+        """Restore the panels the user pinned in a previous session."""
+        for panel_id in settings.pinned_panels or []:
+            try:
+                panel = self.query_one(f"#{panel_id}")
+            except Exception:
+                continue  # unknown/renamed panel id in settings
+            panel.pinned = True
+            panel.dismissed = False
+            panel.refresh_visibility()
+
+    def _apply_live_settings(self) -> None:
+        """Called after EVERY settings change from the modal: apply to the
+        running app immediately (theme, transcript, panels) — no restart."""
+        settings = get_settings()
+        # A theme change re-renders through the _on_theme_applied listener;
+        # only rerender here when the theme did NOT change (e.g. compact
+        # mode / timestamps), to avoid doing the work twice.
+        theme_changed = settings.theme != get_current_theme()
+        if theme_changed:
+            apply_theme(settings.theme)
+        else:
+            self._refresh_dynamic_widgets()
+        self._restore_pinned_panels(settings)
+        self._relayout_panels()
+
+    def _on_theme_applied(self, theme_name: str) -> None:
+        """Theme token swap finished — re-resolve everything that bakes
+        colors into markup at render time."""
+        self._refresh_dynamic_widgets()
+
+    def _refresh_dynamic_widgets(self) -> None:
+        settings = get_settings()
+        try:
+            self.query_one(WelcomeCard).refresh_theme()
+        except Exception:
+            pass  # welcome card cleared
+        try:
+            self.query_one("#chat-panel", ChatPanel).rerender()
+        except Exception:
+            pass
+        try:
+            self.query_one(StatusBar).refresh()
+        except Exception:
+            pass
+        # Panel headers/cards resolve colors at render(); force a repaint.
+        for panel_id in ("#thinking-panel", "#tool-panel", "#agents-panel"):
+            try:
+                panel = self.query_one(panel_id)
+            except Exception:
+                continue
+            for widget in panel.query("Static"):
+                widget.refresh()
+
     def action_show_help(self) -> None:
         help_text = """
   Nexus — keys & commands
   ───────────────────────
   ctrl+p  command palette      ctrl+l  clear chat
   ctrl+g  thinking panel       ctrl+t  tools panel
-  ctrl+a  agents panel         f1      this help
+  ctrl+a  agents panel         ctrl+s  settings & themes
+  f1      this help
 
-  /help /clear /history /tools /model /provider
+  /help /settings /theme /clear /history /tools /model /provider
   /session /facts /doctor /mcp /voice /exit
         """
         chat_panel = self.query_one("#chat-panel", ChatPanel)
@@ -544,6 +639,29 @@ class NexusTUI(App):
 
         if cmd in ("help", "h"):
             self.action_show_help()
+            return True
+
+        if cmd == "settings":
+            self.action_open_settings()
+            return True
+
+        if cmd == "theme":
+            if args:
+                wanted = args.strip().lower().replace("_", "-")
+                if wanted in THEME_NAMES:
+                    apply_theme(wanted)
+                    get_settings().theme = wanted
+                    save_settings_now()
+                    system_msg(f"Theme set to: {wanted}")
+                else:
+                    system_msg(
+                        f"Unknown theme: {args}\nAvailable: {', '.join(THEME_NAMES)}"
+                    )
+            else:
+                applied = cycle_theme()
+                get_settings().theme = applied
+                save_settings_now()
+                system_msg(f"Theme: {applied}")
             return True
 
         if cmd == "clear":
@@ -687,6 +805,22 @@ class NexusTUI(App):
 
     # ── the turn loop ─────────────────────────────────────────────
 
+    def _current_provenance(self) -> tuple[str, str]:
+        """(provider, model) for provenance rows — same source as the
+        status bar; ("", "") when nothing is configured."""
+        try:
+            from ..providers import get_manager
+
+            mgr = get_manager()
+            if mgr.configs:
+                provider = mgr.active_provider or ""
+                cfg = mgr.get_provider_config(provider)
+                model = self.state_manager.state.active_model or (cfg.model if cfg else "")
+                return provider, model or ""
+        except Exception:
+            pass
+        return "", ""
+
     async def _process_input(self, user_input: str) -> None:
         if not user_input.strip():
             return
@@ -719,6 +853,7 @@ class NexusTUI(App):
             self.state_manager.state.max_context_tokens = orchestrator.config.max_context_tokens
 
             self._stream_msg = None
+            prov_provider, prov_model = self._current_provenance()
 
             async def stream_callback(content: str):
                 # Streaming only fires for no-tool turns (pm.stream refuses
@@ -730,6 +865,8 @@ class NexusTUI(App):
                         content=content,
                         timestamp=datetime.now(),
                         streaming=True,
+                        provider=prov_provider,
+                        model=prov_model,
                     )
                     chat_panel.add_message(self._stream_msg)
                 else:
@@ -758,6 +895,9 @@ class NexusTUI(App):
                     role=MessageRole.ASSISTANT,
                     content=turn.assistant_message,
                     timestamp=datetime.now(),
+                    provider=prov_provider,
+                    model=prov_model,
+                    elapsed_ms=turn.duration_ms or None,
                 )
                 chat_panel.add_message(final_msg)
                 self.state_manager.record_message(final_msg)

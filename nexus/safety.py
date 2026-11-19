@@ -63,24 +63,49 @@ class Rule:
     examples: list[str] = field(default_factory=list)
 
     def matches(self, context: dict[str, Any]) -> bool:
-        """Check if this rule applies to the given context."""
-        path = context.get("path", "")
+        """Check if this rule applies to the given context.
+
+        Matching semantics (documented per rule):
+
+        - ``pattern`` is a case-insensitive regular expression (``re.search``,
+          not anchored) tested against BOTH the command text (e.g. the
+          bash/git command line in ``context["command"]``) and the target
+          path (``context["path"]``). Previously patterns were tested against
+          ``path`` only, which meant the command-oriented rules below
+          (``rm -rf``, force push, destructive SQL, ...) could never fire on
+          a ``{"tool": "bash", "command": ...}`` context — the BLOCK rules
+          existed but were dead code.
+        - ``blocked_paths`` / ``allowed_paths`` are case-insensitive substring
+          checks against the same two fields.
+        """
+        texts = [
+            str(context.get("command") or ""),
+            str(context.get("path") or ""),
+        ]
 
         # Check blocked paths
         if self.blocked_paths:
             for blocked in self.blocked_paths:
-                if blocked in path:
+                if any(blocked.lower() in text.lower() for text in texts if text):
                     return True
 
         # Check allowed paths (if set, only these are allowed)
         if self.allowed_paths:
-            allowed = any(a in path for a in self.allowed_paths)
+            allowed = any(
+                a.lower() in text.lower()
+                for text in texts
+                if text
+                for a in self.allowed_paths
+            )
             if not allowed:
                 return False
 
-        # Check pattern
-        if self.pattern and path:
-            return bool(re.search(self.pattern, path))
+        # Check pattern (against command AND path, case-insensitively)
+        if self.pattern:
+            for text in texts:
+                if text and re.search(self.pattern, text, re.IGNORECASE):
+                    return True
+            return False
 
         return False
 
@@ -163,11 +188,15 @@ class SafetyEngine:
         ),
         Rule(
             id="no-force-push",
-            name="No Force Push to Main",
-            description="git push --force to main/master is dangerous",
+            name="No Force Push",
+            description="git push --force rewrites remote history and is blocked (use --force-with-lease after review)",
             category=RuleCategory.DESTRUCTIVE,
             level=RuleLevel.BLOCK,
-            pattern=r"git\s+push\s+.*--force\s+.*(main|master|main)",
+            # Matches --force / -f in any position; --force-with-lease (the
+            # safer variant) is explicitly allowed. Replaces the old pattern
+            # that required "main" AFTER --force and so missed
+            # `git push --force origin main` and `git push -f origin main`.
+            pattern=r"\bgit\s+push\b.*(?:--force(?!-with-lease)\b|\s-f\b)",
             require_confirmation=True,
         ),
         Rule(
@@ -178,6 +207,54 @@ class SafetyEngine:
             level=RuleLevel.BLOCK,
             blocked_paths=["/etc/", "/usr/bin/", "/usr/sbin/", "/bin/", "/sbin/", "/lib/"],
             require_confirmation=True,
+        ),
+        # The rules below are irreversible, host-wide operations: they are
+        # hard BLOCKs with no confirmation path (require_confirmation=False —
+        # the safety engine never runs them; approval cannot rehabilitate
+        # them). Patterns are matched case-insensitively against the command
+        # text by Rule.matches.
+        Rule(
+            id="no-fork-bomb",
+            name="No Fork Bombs",
+            description="Self-replicating process bombs (:(){ :|:& };: and variants) are blocked outright",
+            category=RuleCategory.DESTRUCTIVE,
+            level=RuleLevel.BLOCK,
+            # Whitespace-tolerant match for the classic bash fork bomb.
+            pattern=r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:&\s*\}\s*;\s*:",
+            require_confirmation=False,
+        ),
+        Rule(
+            id="no-mkfs",
+            name="No Filesystem Formatting",
+            description="mkfs destroys entire filesystems and is blocked outright",
+            category=RuleCategory.DESTRUCTIVE,
+            level=RuleLevel.BLOCK,
+            # mkfs, mkfs.ext4, mkfs.vfat, MKFS ... (device argument irrelevant).
+            pattern=r"\bmkfs(?:\.[a-z0-9]+)?\b",
+            require_confirmation=False,
+        ),
+        Rule(
+            id="no-dd-raw-disk",
+            name="No Raw Disk Writes",
+            description="dd to a raw disk device (/dev/sd*, /dev/nvme*, ...) is blocked outright",
+            category=RuleCategory.DESTRUCTIVE,
+            level=RuleLevel.BLOCK,
+            # dd ... of=/dev/<raw disk>. Shell operators excluded from the
+            # span so `dd ... | tee of=/dev/x`-style decoys don't match.
+            pattern=r"\bdd\s[^|;&]*\bof=/dev/(?:sd|hd|nvme|vd|mmcblk|disk)",
+            require_confirmation=False,
+        ),
+        Rule(
+            id="no-chmod-777-root",
+            name="No Recursive Chmod on /",
+            description="chmod -R 777 / destroys system permissions and is blocked outright",
+            category=RuleCategory.DESTRUCTIVE,
+            level=RuleLevel.BLOCK,
+            # Permissive mode directly on / (with or without -R); subpaths
+            # like /etc/hosts do NOT match because the pattern requires the
+            # slash to be followed by whitespace or end-of-string.
+            pattern=r"\bchmod\s+(?:-[a-z]*r[a-z]*\s+)?[0-7]{3,4}\s+/(?:\s|$)",
+            require_confirmation=False,
         ),
         # === CODE QUALITY ===
         Rule(

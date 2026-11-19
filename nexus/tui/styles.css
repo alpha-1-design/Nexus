@@ -132,6 +132,31 @@ DiffBlock {
     margin: 1 0;
 }
 
+/* ── Boot checklist (agentic order of service) ─────────────────
+ * One subsystem probe line at a time, above the welcome card. */
+
+.boot-checklist {
+    height: auto;
+    margin: 1 0 0 1;
+    color: $text-secondary;
+}
+
+/* ── Compact mode (tighter spacing, metadata reduced to badges) ── */
+
+ChatMessageWidget.compact {
+    margin: 0 0 0 0;
+}
+
+ChatMessageWidget.compact .msg-provenance {
+    display: none;
+}
+
+/* Assistant provenance row: ✦ Nexus · provider/model · elapsed */
+.msg-provenance {
+    height: auto;
+    color: $text-secondary;
+}
+
 /* ── Welcome card ────────────────────────────────────────────── */
 
 .welcome-logo {
@@ -317,4 +342,53 @@ NotificationOverlay {
     margin: 1;
     height: auto;
     dock: bottom;
+}
+
+/* ── Settings modal (ctrl+s / /settings) ─────────────────────── */
+
+#settings-body {
+    background: $bg-secondary;
+    border: round $border-active;
+    width: 60;
+    max-width: 90%;
+    max-height: 80%;
+    margin: 1 2;
+    padding: 1 2;
+}
+
+.settings-title {
+    color: $accent;
+    text-style: bold;
+    height: 1;
+    margin-bottom: 1;
+}
+
+#settings-rows {
+    height: auto;
+    background: transparent;
+}
+
+.settings-group {
+    color: $text-dim;
+    height: 1;
+    margin-top: 1;
+    padding: 0 1;
+}
+
+.settings-row {
+    height: 1;
+    color: $text-secondary;
+    padding: 0 1;
+}
+
+.settings-row.selected {
+    background: $bg-hover;
+    color: $accent;
+    text-style: bold;
+}
+
+.settings-hint {
+    height: 1;
+    color: $text-dim;
+    margin-top: 1;
 }

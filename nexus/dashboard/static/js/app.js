@@ -33,6 +33,75 @@
     streaming: false,
   };
 
+  // ── auth: X-Nexus-Token on every API call ──────────────────
+  // The backend requires the token for mutating routes (POST/PUT/DELETE)
+  // and, in strict mode, for all /api routes. The token is printed once
+  // when `nexus dashboard` starts (stored at ~/.nexus/dashboard-token);
+  // here it is kept in localStorage after a one-time prompt. A 401
+  // re-opens the prompt — e.g. when the token was rotated on restart —
+  // and the failed request is retried once with the new token.
+  const TOKEN_STORAGE_KEY = "nexus_dashboard_token";
+  const TOKEN_HEADER = "X-Nexus-Token";
+
+  function getStoredToken() {
+    return localStorage.getItem(TOKEN_STORAGE_KEY) || "";
+  }
+
+  function promptForToken() {
+    return new Promise((resolve) => {
+      // Minimal modal: overlay + one password input. No framework,
+      // matching the rest of this file. Save stores the token;
+      // Cancel resolves without one (the next call will 401 again).
+      const existing = document.getElementById("token-modal");
+      if (existing) existing.remove();
+      const overlay = document.createElement("div");
+      overlay.id = "token-modal";
+      overlay.style.cssText =
+        "position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;z-index:9999;";
+      overlay.innerHTML = `
+        <div style="background:#16181f;color:#e6e6e6;padding:24px;border-radius:12px;width:min(92vw,420px);font:14px/1.5 system-ui,sans-serif;border:1px solid #2a2e3a;">
+          <div style="font-weight:600;margin-bottom:6px;">Dashboard token required</div>
+          <div style="opacity:.75;margin-bottom:12px;">Paste the token printed when <code>nexus dashboard</code> started (also stored in <code>~/.nexus/dashboard-token</code>).</div>
+          <input id="token-input" type="password" autocomplete="off" placeholder="${TOKEN_HEADER}" style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;border:1px solid #2a2e3a;background:#0f1117;color:#e6e6e6;" />
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">
+            <button id="token-cancel" style="padding:6px 12px;background:transparent;color:#9aa0b0;border:1px solid #2a2e3a;border-radius:8px;cursor:pointer;">Cancel</button>
+            <button id="token-save" style="padding:6px 12px;background:#4f7cff;color:#fff;border:none;border-radius:8px;cursor:pointer;">Save token</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const input = overlay.querySelector("#token-input");
+      input.focus();
+      const close = (save) => {
+        if (save && input.value.trim()) {
+          localStorage.setItem(TOKEN_STORAGE_KEY, input.value.trim());
+        }
+        overlay.remove();
+        resolve();
+      };
+      overlay.querySelector("#token-save").addEventListener("click", () => close(true));
+      overlay.querySelector("#token-cancel").addEventListener("click", () => close(false));
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") close(true);
+        if (e.key === "Escape") close(false);
+      });
+    });
+  }
+
+  async function apiFetch(url, opts = {}) {
+    let res = await fetch(url, withToken(opts));
+    if (res.status === 401) {
+      await promptForToken();
+      res = await fetch(url, withToken(opts)); // retry once with the saved token
+    }
+    return res;
+  }
+
+  function withToken(opts) {
+    return Object.assign({}, opts, {
+      headers: Object.assign({}, opts.headers || {}, { [TOKEN_HEADER]: getStoredToken() }),
+    });
+  }
+
   // ═══════════ SIDEBAR / VIEW SWITCHING ═══════════
 
   function initSidebar() {
@@ -115,7 +184,7 @@
     setStatus("busy");
 
     try {
-      const res = await fetch("/api/chat/stream", {
+      const res = await apiFetch("/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text }),
@@ -220,7 +289,7 @@
 
   async function refreshStatus() {
     try {
-      const res = await fetch("/api/status");
+      const res = await apiFetch("/api/status");
       if (!res.ok) throw new Error();
       const data = await res.json();
       setStatus("online");
@@ -233,7 +302,7 @@
 
   async function refreshVitals() {
     try {
-      const res = await fetch("/api/vitals");
+      const res = await apiFetch("/api/vitals");
       const data = await res.json();
       $("#vital-cpu").textContent = `CPU ${data.cpu ?? "—"}`;
       $("#vital-disk").textContent = `Disk ${data.disk ?? "—"}`;
@@ -244,7 +313,7 @@
 
   async function refreshSessions() {
     try {
-      const res = await fetch("/api/sessions");
+      const res = await apiFetch("/api/sessions");
       const data = await res.json();
       const sessions = data.sessions || [];
       const list = $("#session-list");
@@ -272,7 +341,7 @@
     const grid = $("#agents-grid");
     grid.innerHTML = `<div class="muted">Loading agents…</div>`;
     try {
-      const res = await fetch("/api/agent/list");
+      const res = await apiFetch("/api/agent/list");
       const data = await res.json();
       const agents = data.agents || [];
       $("#nav-agents-count").textContent = agents.length;
@@ -306,7 +375,7 @@
       const btn = $("#agent-spawn-btn");
       btn.disabled = true;
       try {
-        await fetch("/api/agent/spawn", {
+        await apiFetch("/api/agent/spawn", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ task, role }),
@@ -327,7 +396,7 @@
     const grid = $("#skills-grid");
     grid.innerHTML = `<div class="muted">Loading skills…</div>`;
     try {
-      const res = await fetch("/api/skills");
+      const res = await apiFetch("/api/skills");
       const data = await res.json();
       allSkills = data.skills || [];
       $("#nav-skills-count").textContent = allSkills.length;
@@ -378,7 +447,7 @@
     const grid = $("#mcp-grid");
     grid.innerHTML = `<div class="muted">Loading MCP marketplace…</div>`;
     try {
-      const res = await fetch("/api/mcp/catalog");
+      const res = await apiFetch("/api/mcp/catalog");
       const data = await res.json();
       $("#nav-mcp-count").textContent = data.total ?? (data.servers || []).length;
 
@@ -427,7 +496,7 @@
         btn.disabled = true;
         btn.textContent = "Installing…";
         try {
-          const res = await fetch("/api/mcp/install", {
+          const res = await apiFetch("/api/mcp/install", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ name: btn.dataset.name }),
@@ -456,7 +525,7 @@
       const params = new URLSearchParams();
       if (query) params.set("q", query);
       if (category) params.set("category", category);
-      const res = await fetch(`/api/mcp/catalog?${params.toString()}`);
+      const res = await apiFetch(`/api/mcp/catalog?${params.toString()}`);
       const data = await res.json();
       renderMcp(data.servers || []);
     };
@@ -476,7 +545,7 @@
     const grid = $("#providers-grid");
     grid.innerHTML = `<div class="muted">Loading providers…</div>`;
     try {
-      const res = await fetch("/api/providers");
+      const res = await apiFetch("/api/providers");
       const data = await res.json();
       const providers = data.providers || data || [];
       if (!Array.isArray(providers) || !providers.length) {

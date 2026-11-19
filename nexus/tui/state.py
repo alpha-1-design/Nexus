@@ -41,6 +41,10 @@ class ChatMessage:
     card_id: str | None = None
     # True while assistant tokens are still streaming in
     streaming: bool = False
+    # --- assistant provenance (rendered as a dim mini-header row) ---
+    provider: str | None = None
+    model: str | None = None
+    elapsed_ms: int | None = None
 
     @property
     def is_tool_card(self) -> bool:

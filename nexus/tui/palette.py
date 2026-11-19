@@ -9,7 +9,7 @@ class CommandPalette(ModalScreen[str]):
 
     BINDINGS = [("escape", "dismiss", "Dismiss")]
 
-    COMMANDS = ["/help", "/skills", "/init", "/clear", "/history", "/tools", "/model", "/facts", "/session", "/exit"]
+    COMMANDS = ["/help", "/settings", "/theme", "/skills", "/init", "/clear", "/history", "/tools", "/model", "/facts", "/session", "/exit"]
 
     def compose(self) -> ComposeResult:
         yield Vertical(

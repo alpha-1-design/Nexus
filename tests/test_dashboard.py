@@ -8,15 +8,33 @@ return a generic 503. These tests exist to catch that class of bug.
 
 import pytest
 
+TEST_TOKEN = "dashboard-test-token"
+
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    """Dashboard test client with isolated HOME and a fixed auth token.
+
+    Mutating routes (POST/PUT/DELETE) require the X-Nexus-Token header
+    since the dashboard-auth hardening; tests that exercise them pass
+    ``headers=auth_headers``.
+    """
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", TEST_TOKEN)
+    import nexus.dashboard.app as dash_app
+
+    monkeypatch.setattr(dash_app, "_auth", None)
+
     from nexus.dashboard.app import app
 
     app.config["TESTING"] = True
     with app.test_client() as c:
         yield c
+
+
+@pytest.fixture
+def auth_headers():
+    return {"X-Nexus-Token": TEST_TOKEN}
 
 
 def test_nexus_api_imports_cleanly():
@@ -74,8 +92,8 @@ def test_api_mcp_catalog_category_filter(client):
     assert all(s["category"] == "database" for s in data["servers"])
 
 
-def test_api_mcp_install_and_uninstall(client):
-    resp = client.post("/api/mcp/install", json={"name": "redis"})
+def test_api_mcp_install_and_uninstall(client, auth_headers):
+    resp = client.post("/api/mcp/install", json={"name": "redis"}, headers=auth_headers)
     assert resp.status_code == 200
     result = resp.get_json()
     assert result["status"] == "success"
@@ -84,12 +102,16 @@ def test_api_mcp_install_and_uninstall(client):
     names = [s["name"] for s in resp.get_json()["servers"]]
     assert "redis" in names
 
-    resp = client.post("/api/mcp/uninstall", json={"name": "redis"})
+    resp = client.post("/api/mcp/uninstall", json={"name": "redis"}, headers=auth_headers)
     assert resp.get_json()["status"] == "success"
 
 
-def test_api_mcp_install_unknown_server(client):
-    resp = client.post("/api/mcp/install", json={"name": "definitely-not-a-real-server"})
+def test_api_mcp_install_unknown_server(client, auth_headers):
+    resp = client.post(
+        "/api/mcp/install",
+        json={"name": "definitely-not-a-real-server"},
+        headers=auth_headers,
+    )
     assert resp.status_code == 200
     assert resp.get_json()["status"] == "error"
 
@@ -101,19 +123,24 @@ def test_api_vitals(client):
     assert "cpu" in data and "disk" in data
 
 
-def test_api_chat_stream_requires_message(client):
-    resp = client.post("/api/chat/stream", json={})
+def test_api_chat_stream_requires_message(client, auth_headers):
+    resp = client.post("/api/chat/stream", json={}, headers=auth_headers)
     assert resp.status_code == 400
 
 
-def test_api_chat_stream_returns_sse(client):
-    resp = client.post("/api/chat/stream", json={"message": "hello"})
+def test_api_chat_stream_returns_sse(client, auth_headers):
+    resp = client.post("/api/chat/stream", json={"message": "hello"}, headers=auth_headers)
     assert resp.status_code == 200
     assert resp.mimetype == "text/event-stream"
     body = resp.get_data(as_text=True)
     # With no provider configured this should still complete gracefully
     # with a "done" event rather than hanging or crashing.
     assert '"type": "done"' in body or '"type":"done"' in body
+
+
+def test_api_chat_stream_without_token_is_401(client):
+    resp = client.post("/api/chat/stream", json={"message": "hello"})
+    assert resp.status_code == 401
 
 
 def test_api_agent_list(client):

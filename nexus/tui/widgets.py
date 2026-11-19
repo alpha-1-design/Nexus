@@ -5,8 +5,10 @@ one accent color per role. Icons are limited to ▸ ✓ ✗ ⟳ ● ○ ● styl
 no emoji clutter.
 """
 
+import json
 import os
 import re
+import subprocess
 from typing import Any
 
 from rich.markup import escape
@@ -21,8 +23,16 @@ from textual.widgets import Input, Static
 from .colors import (
     CSS_COLORS,
     DEFAULT_BRAND_COLOR,
+    apply_theme,
     format_provider_badge,
+    get_current_theme,
     get_provider_brand_color,
+    on_theme_change,
+)
+from .settings import (
+    TUISettings,
+    format_timestamp,
+    get_settings,
 )
 from .state import (
     AgentInfo,
@@ -76,12 +86,63 @@ ROLE_CSS_CLASS = {
     MessageRole.TOOL: "role-tool",
 }
 
+# Status glyphs + live token colors. Colors are re-resolved on every theme
+# swap by _refresh_theme_colors (below), so `TOOL_STATUS_ICONS["running"][1]`
+# always reflects the active theme.
 TOOL_STATUS_ICONS = {
-    "pending": ("○", "dim"),
+    "pending": ("○", CSS_COLORS["text_dim"]),
     "running": ("⟳", CSS_COLORS["accent"]),
     "done": ("✓", CSS_COLORS["success"]),
     "error": ("✗", CSS_COLORS["error"]),
 }
+
+# Animated spinner frames for running tool cards, per spinner_style setting.
+SPINNER_FRAMES: dict[str, tuple[str, ...]] = {
+    "braille": ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"),
+    "dots": ("◐", "◓", "◑", "◒"),
+    "pulse": ("▁", "▃", "▅", "▆", "▇", "▆", "▅", "▃"),
+}
+
+# Agent status glyphs (colors live, re-resolved on theme swap).
+AGENT_STATUS_ICONS = {
+    AgentStatus.IDLE: ("○", "text_dim"),
+    AgentStatus.THINKING: ("⟳", "accent"),
+    AgentStatus.TOOL_USE: ("▸", "warning"),
+    AgentStatus.WAITING: ("◐", "text_dim"),
+    AgentStatus.ERROR: ("✗", "error"),
+}
+
+
+def _refresh_theme_colors(theme_name: str | None = None) -> None:
+    """Re-resolve the color-bearing module dicts after a theme swap.
+
+    These dicts freeze hex values at import time (and hold tuple values the
+    tests unpack), so instead of rebinding them we mutate their entries in
+    place — every reader sees the active theme on its next render. Takes the
+    (ignored) theme name argument so apply_theme can call it directly."""
+    ROLE_STYLES[MessageRole.USER] = ("you", CSS_COLORS["user_message"])
+    ROLE_STYLES[MessageRole.ASSISTANT] = ("nexus", CSS_COLORS["assistant_message"])
+    ROLE_STYLES[MessageRole.SYSTEM] = ("sys", CSS_COLORS["system_message"])
+    ROLE_STYLES[MessageRole.TOOL] = ("tool", CSS_COLORS["tool_call"])
+    TOOL_STATUS_ICONS["pending"] = ("○", CSS_COLORS["text_dim"])
+    TOOL_STATUS_ICONS["running"] = ("⟳", CSS_COLORS["accent"])
+    TOOL_STATUS_ICONS["done"] = ("✓", CSS_COLORS["success"])
+    TOOL_STATUS_ICONS["error"] = ("✗", CSS_COLORS["error"])
+
+
+on_theme_change(_refresh_theme_colors)
+
+
+def _status_icon(status: str | None) -> tuple[str, str]:
+    """(glyph, color) for a tool-card/tool status, with the running glyph
+    animated per the user's spinner_style setting."""
+    key = status or "pending"
+    if key == "running":
+        style = get_settings().spinner_style
+        frames = SPINNER_FRAMES.get(style, SPINNER_FRAMES["braille"])
+        glyph = frames[ChatPanel.spinner_frame % len(frames)]
+        return glyph, TOOL_STATUS_ICONS["running"][1]
+    return TOOL_STATUS_ICONS.get(key, TOOL_STATUS_ICONS["pending"])
 
 
 def _truncate(value: str, limit: int) -> str:
@@ -101,6 +162,25 @@ def _summarize_target(args: dict[str, Any]) -> str:
         if isinstance(value, str) and value:
             return _truncate(value, 48)
     return ""
+
+
+def format_provenance(provider: str | None, model: str | None, elapsed_ms: int | None = None) -> str:
+    """Pure provenance-line formatter for assistant messages.
+
+    `✦ Nexus · groq · llama-3.3-70b · 3.2s` — provider/model when known,
+    elapsed seconds only when known. Empty string when there is nothing to
+    show (so non-agent-looking system/echo messages stay clean).
+    """
+    parts = ["✦ Nexus"]
+    if provider:
+        parts.append(provider)
+    if model:
+        parts.append(model)
+    if elapsed_ms is not None and elapsed_ms >= 0:
+        parts.append(f"{elapsed_ms / 1000:.1f}s")
+    if len(parts) == 1:
+        return ""
+    return " · ".join(parts)
 
 
 # --- unified diff rendering -------------------------------------------------
@@ -124,24 +204,28 @@ def classify_diff_line(line: str) -> str:
     return "ctx"
 
 
-DIFF_STYLES = {
-    "meta": f"dim {CSS_COLORS['diff_meta']}",
-    "hunk": f"dim {CSS_COLORS['diff_meta']}",
-    "add": CSS_COLORS["diff_add"],
-    "del": CSS_COLORS["diff_del"],
-    "ctx": "dim",
-}
+def _diff_styles() -> dict[str, str]:
+    """Diff line styles resolved against the LIVE theme tokens (semantic
+    green/red in every theme, tinted per theme)."""
+    return {
+        "meta": f"dim {CSS_COLORS['diff_meta']}",
+        "hunk": f"dim {CSS_COLORS['diff_meta']}",
+        "add": CSS_COLORS["diff_add"],
+        "del": CSS_COLORS["diff_del"],
+        "ctx": "dim",
+    }
 
 
 def render_diff(diff_text: str) -> Text:
     """Parse standard unified diff text into a colorized rich Text.
 
-    `+` lines green, `-` lines red, `@@`/`---`/`+++` dim cyan. Long lines wrap
-    naturally inside the surrounding Static, so no manual wrapping here.
+    `+` lines green, `-` lines red, `@@`/`---`/`+++` dim accent. Long lines
+    wrap naturally inside the surrounding Static, so no manual wrapping here.
     """
+    styles = _diff_styles()
     text = Text()
     for line in diff_text.splitlines() or [""]:
-        text.append(line, DIFF_STYLES[classify_diff_line(line)])
+        text.append(line, styles[classify_diff_line(line)])
         text.append("\n")
     return text
 
@@ -162,7 +246,12 @@ class DiffBlock(Static):
 
 class ChatMessageWidget(Container):
     """One transcript entry: role badge + dim HH:MM stamp + wrapped body, with
-    a left accent border color-coded per role."""
+    a left accent border color-coded per role.
+
+    Assistant entries additionally carry a dim provenance row —
+    `✦ Nexus · provider/model · 3.2s` — like a real agent run log. User
+    messages stay compact; system messages are untouched.
+    """
 
     def __init__(self, message: ChatMessage, **kwargs):
         super().__init__(**kwargs)
@@ -173,11 +262,30 @@ class ChatMessageWidget(Container):
     # content is rendered as a Text object (brackets never parsed).
     def _header_markup(self) -> str:
         label, color = ROLE_STYLES.get(self.message.role, ROLE_STYLES[MessageRole.SYSTEM])
-        stamp = self.message.timestamp.strftime("%H:%M")
-        header = f"[bold {color}]{label}[/] [dim]{stamp}[/]"
+        header = f"[bold {color}]{label}[/]"
+        settings = get_settings()
+        if not settings.compact_mode:
+            stamp = format_timestamp(self.message.timestamp, settings.timestamps)
+            if stamp:
+                header += f" [dim]{stamp}[/]"
         if self.message.role == MessageRole.TOOL and not self.message.is_tool_card:
             header += f" [dim]{escape(self.message.tool_name or '')}[/]"
         return header
+
+    def _provenance_markup(self) -> str | None:
+        """`✦ Nexus · groq · llama-3.3-70b · 3.2s` — provenance line for
+        assistant messages, in the assistant role color, dim body."""
+        if self.message.role != MessageRole.ASSISTANT:
+            return None
+        text = format_provenance(
+            self.message.provider,
+            self.message.model,
+            self.message.elapsed_ms,
+        )
+        if not text:
+            return None
+        color = ROLE_STYLES[MessageRole.ASSISTANT][1]
+        return f"[dim {color}]{escape(text)}[/]"
 
     def _content_text(self) -> Text:
         content = self.message.content or ""
@@ -187,7 +295,7 @@ class ChatMessageWidget(Container):
             content += f"\n[tool call: {tc.get('name', 'unknown')}]"
         text = Text(content)
         text = apply_inline_markup(text)
-        if self.message.streaming and self._cursor_on:
+        if self.message.streaming and self._cursor_on and get_settings().streaming_cursor:
             text.append("▌", style=CSS_COLORS["accent"])
         return text
 
@@ -198,10 +306,15 @@ class ChatMessageWidget(Container):
 
     def compose(self) -> ComposeResult:
         yield Static(self._header_markup(), classes="msg-header")
+        provenance = self._provenance_markup()
+        if provenance and not get_settings().compact_mode:
+            yield Static(provenance, classes="msg-provenance")
         yield Static(self._content_text(), classes="content")
 
     def on_mount(self) -> None:
         self.add_class(ROLE_CSS_CLASS.get(self.message.role, "role-system"))
+        if get_settings().compact_mode:
+            self.add_class("compact")
 
     def toggle_cursor(self) -> None:
         """Blink the streaming cursor (driven by ChatPanel's interval)."""
@@ -235,7 +348,7 @@ class ToolCardWidget(Container):
         msg = self.message
         arrow = "▾" if self.expanded else "▸"
         name = (msg.tool_name or "tool").capitalize()
-        icon, color = TOOL_STATUS_ICONS.get(msg.tool_status or "running", TOOL_STATUS_ICONS["running"])
+        icon, color = _status_icon(msg.tool_status or "running")
         parts = [f"[dim]{arrow}[/] [bold]{escape(name)}[/]"]
         target = _summarize_target(msg.tool_args)
         if target:
@@ -267,7 +380,7 @@ class ToolCardWidget(Container):
         yield Static(self._header_markup(), classes="tool-card-header")
         with Container(classes="tool-card-body"):
             yield Static(self._args_markup(), classes="tool-card-args")
-            if self.message.tool_diff:
+            if self.message.tool_diff and get_settings().show_diffs:
                 yield DiffBlock(self.message.tool_diff, classes="tool-card-diff")
             yield Static(self._result_markup(), classes="tool-card-result")
 
@@ -309,7 +422,7 @@ class ToolCardWidget(Container):
             self.query_one(".tool-card-result", Static).update(self._result_markup())
         except Exception:
             pass
-        if diff and not self.query(".tool-card-diff"):
+        if diff and get_settings().show_diffs and not self.query(".tool-card-diff"):
             try:
                 self.query_one(".tool-card-body").mount(DiffBlock(diff, classes="tool-card-diff"))
             except Exception:
@@ -317,7 +430,14 @@ class ToolCardWidget(Container):
 
 
 class ChatPanel(VerticalScroll):
-    """The hero panel: scrollable chat transcript."""
+    """The hero panel: scrollable chat transcript.
+
+    Drives two cheap animations: the streaming cursor blink and the live
+    spinner on running tool cards (frame index shared class-wide so one
+    interval advances every card in lockstep).
+    """
+
+    spinner_frame: int = 0
 
     def __init__(self, messages: list[ChatMessage] | None = None, **kwargs):
         super().__init__(**kwargs)
@@ -329,12 +449,24 @@ class ChatPanel(VerticalScroll):
         yield Vertical(id="messages-container")
 
     def on_mount(self) -> None:
-        # Blink the streaming cursor while a message is being received.
+        # Blink the streaming cursor while a message is being received, and
+        # animate the glyph of any running tool card.
         self.set_interval(0.5, self._tick_cursor)
+        self.set_interval(0.12, self._tick_spinners)
 
     def _tick_cursor(self) -> None:
         if self._streaming_widget is not None:
             self._streaming_widget.toggle_cursor()
+
+    def _tick_spinners(self) -> None:
+        """Advance the shared spinner frame and re-render running cards."""
+        ChatPanel.spinner_frame = (ChatPanel.spinner_frame + 1) % 64
+        for card in self.query(ToolCardWidget):
+            if card.message.tool_status == "running":
+                try:
+                    card.query_one(".tool-card-header", Static).update(card._header_markup())
+                except Exception:
+                    pass  # card mid-mount
 
     def _mount(self, widget: Container) -> None:
         self.query_one("#messages-container").mount(widget)
@@ -403,6 +535,32 @@ class ChatPanel(VerticalScroll):
         self._card_seq = 0
         self.query_one("#messages-container").remove_children()
 
+    def rerender(self) -> None:
+        """Re-mount every transcript message in order.
+
+        Header/provenance/diff markup bakes colors and settings into Statics
+        at compose time, so live theme/settings changes re-mount instead of
+        trying to patch every child. Tool-card expansion state is preserved;
+        a streaming message stays the live streaming widget.
+        """
+        container = self.query_one("#messages-container")
+        expanded: dict[str | None, bool] = {}
+        for card in self.query(ToolCardWidget):
+            expanded[card.message.card_id] = card.expanded
+        container.remove_children()
+        self._streaming_widget = None
+        for msg in self._messages:
+            if msg.is_tool_card:
+                widget = ToolCardWidget(msg, id=f"tool-card-{msg.card_id}")
+                if expanded.get(msg.card_id):
+                    widget.expanded = True
+            else:
+                widget = ChatMessageWidget(msg)
+                if msg.streaming:
+                    self._streaming_widget = widget
+            container.mount(widget)
+        self.call_after_refresh(self._scroll_to_end)
+
 
 class DiffMessageWidget(Container):
     """Approval-flow message: heading + unified diff + optional instruction."""
@@ -424,8 +582,9 @@ class WelcomeCard(Container):
     """Boot-time session card: ASCII logo, provider badge, version, tips.
 
     Provider-aware identity: the logo tints with the connected provider's
-    brand color (neutral cyan when none), with a `⬢ groq · llama-3.3-70b`
-    badge underneath in the same color.
+    brand color; with no provider configured it falls back to the current
+    theme's `logo_tint` token (neutral cyan on the default theme). A live
+    theme swap re-tints the card in place via refresh_theme().
     """
 
     def __init__(self, version: str = "0.1.0", provider: str = "", model: str = "", **kwargs):
@@ -437,9 +596,9 @@ class WelcomeCard(Container):
             provider, model = _detect_active_provider()
         self.provider = provider
         self.model = model
-        self.brand_color, self.badge = resolve_welcome_identity(provider, model)
 
     def compose(self) -> ComposeResult:
+        self.brand_color, self.badge = resolve_welcome_identity(self.provider, self.model)
         logo = r"""
   ███╗   ██╗███████╗██╗  ██╗██╗   ██╗███████╗
   ████╗  ██║██╔════╝╚██╗██╔╝██║   ██║██╔════╝
@@ -461,6 +620,7 @@ class WelcomeCard(Container):
             "\n".join(
                 [
                     f"[dim]›[/] [bold]/help[/] [dim]— every slash command[/]",
+                    f"[dim]›[/] [bold]ctrl+s[/] [dim]— settings & themes[/]",
                     f"[dim]›[/] [bold]ctrl+t[/] [dim]— live tool activity[/]",
                     f"[dim]›[/] [bold]ctrl+g[/] [dim]— agent thinking[/]",
                     f"[dim]›[/] [dim]just start typing — the CMD:> prompt is live[/]",
@@ -468,6 +628,24 @@ class WelcomeCard(Container):
             ),
             classes="welcome-tips",
         )
+
+    def refresh_theme(self) -> None:
+        """Re-resolve the logo tint after a live theme swap."""
+        self.brand_color, self.badge = resolve_welcome_identity(self.provider, self.model)
+        try:
+            logo = self.query_one(".welcome-logo", Static)
+            statics = list(self.query("Static"))
+            if statics:
+                # compose() renders the logo as the first Static; swap only
+                # its color runs, keeping the ASCII art untouched.
+                text = Text.from_markup(str(logo.render()))
+                logo.update(f"[bold {self.brand_color}]{text.plain}[/]")
+            if self.badge and self.query(".welcome-badge"):
+                self.query_one(".welcome-badge", Static).update(
+                    f"[bold {self.brand_color}]{escape(self.badge)}[/]"
+                )
+        except Exception:
+            pass  # not mounted yet
 
 
 def _detect_active_provider() -> tuple[str, str]:
@@ -489,13 +667,176 @@ def _detect_active_provider() -> tuple[str, str]:
 def resolve_welcome_identity(provider: str = "", model: str = "") -> tuple[str, str | None]:
     """Pure selection logic for the welcome card's provider-aware identity.
 
-    Returns (brand_color_hex, badge_text_or_None). No provider configured
-    (or an unknown name) keeps the neutral cyan look with no badge, which is
-    also the unit-tested seam — no pixel rendering involved.
+    Returns (brand_color_hex, badge_text_or_None). A connected provider
+    tints the identity with its brand color in EVERY theme; with no provider
+    configured the logo follows the current theme's `logo_tint` token; an
+    unknown provider name keeps the neutral accent. No pixel rendering
+    involved — also the unit-tested seam.
     """
     if not provider:
-        return DEFAULT_BRAND_COLOR, None
+        return CSS_COLORS["logo_tint"], None
     return get_provider_brand_color(provider), format_provider_badge(provider, model)
+
+
+# ── boot checklist (agentic order of service) ────────────────────────────────
+
+
+def _count_mcp_servers(path: str | None = None) -> int:
+    """MCP servers configured in ~/.nexus/mcp-servers.json (0 when absent)."""
+    path = path or os.path.join(os.path.expanduser("~"), ".nexus", "mcp-servers.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return 0
+    if isinstance(data, dict):
+        return len(data)
+    if isinstance(data, list):
+        return len(data)
+    return 0
+
+
+def _discovery_boot_summary() -> dict[str, Any] | None:
+    """Richer boot counts from nexus.discovery.boot_summary() when the
+    parallel-built module exists at runtime; None otherwise. The seam is
+    defensive ON PURPOSE: ImportError, bad payloads and exploding calls all
+    fall back to the local counts below — boot never waits on it."""
+    try:
+        from ..discovery import boot_summary  # type: ignore[attr-defined]
+    except Exception:
+        return None
+    try:
+        summary = boot_summary()
+        return summary if isinstance(summary, dict) else None
+    except Exception:
+        return None
+
+
+def collect_boot_checks() -> list[dict[str, str]]:
+    """Probe every subsystem the TUI leans on. Returns ordered dicts:
+    {name, status: "ok"|"fail"|"none", detail}. Every probe is wrapped so a
+    misbehaving subsystem degrades to a ✗ line instead of crashing boot.
+    `nexus.discovery.boot_summary()` (when present at runtime) overrides the
+    counts with richer data; local probes remain the fallback."""
+    summary = _discovery_boot_summary()
+
+    def count_of(key: str, local: int) -> int:
+        value = summary.get(key) if summary else None
+        return value if isinstance(value, int) else local
+
+    checks: list[dict[str, str]] = []
+
+    # memory
+    try:
+        from ..memory import get_memory
+
+        facts = len(get_memory().get_all_facts())
+        checks.append({"name": "memory", "status": "ok", "detail": f"{facts} facts"})
+    except Exception as e:
+        checks.append({"name": "memory", "status": "fail", "detail": str(e)[:60]})
+
+    # skills
+    try:
+        from ..skills.matcher import get_skill_matcher
+
+        matcher = get_skill_matcher()
+        if not matcher.is_indexed:
+            matcher.ensure_index()
+        checks.append({
+            "name": "skills",
+            "status": "ok",
+            "detail": f"{count_of('skills', matcher.skill_count)} loaded",
+        })
+    except Exception as e:
+        checks.append({"name": "skills", "status": "fail", "detail": str(e)[:60]})
+
+    # tools
+    try:
+        from ..tools import get_registry
+
+        checks.append({
+            "name": "tools",
+            "status": "ok",
+            "detail": f"{count_of('tools', len(get_registry().list_all()))} registered",
+        })
+    except Exception as e:
+        checks.append({"name": "tools", "status": "fail", "detail": str(e)[:60]})
+
+    # mcp servers configured on disk
+    try:
+        mcp_count = count_of("mcp", _count_mcp_servers())
+        checks.append({"name": "mcp", "status": "ok", "detail": f"{mcp_count} servers"})
+    except Exception as e:
+        checks.append({"name": "mcp", "status": "fail", "detail": str(e)[:60]})
+
+    # provider (reuse the welcome card's detector — same source of truth)
+    try:
+        provider, _model = _detect_active_provider()
+        if provider:
+            checks.append({"name": "provider", "status": "ok", "detail": provider})
+        else:
+            checks.append({"name": "provider", "status": "none", "detail": "none configured (/auth)"})
+    except Exception as e:
+        checks.append({"name": "provider", "status": "fail", "detail": str(e)[:60]})
+
+    return checks
+
+
+def format_boot_line(check: dict[str, str], glyph: str = "◆") -> str:
+    """One checklist line: `◆ memory … ✓ 14 facts` / `✗ skills … <reason>`
+    (amber) / `— provider … none configured (/auth)`. Pure → unit-tested."""
+    from .colors import CSS_COLORS
+
+    name = check.get("name", "?")
+    status = check.get("status", "ok")
+    detail = check.get("detail", "")
+    if status == "fail":
+        reason = detail or "unavailable"
+        return f"[{CSS_COLORS['warning']}]✗ {escape(name)} … {escape(reason)}[/]"
+    if status == "none":
+        return f"[{CSS_COLORS['text_dim']}]— {escape(name)} … {escape(detail)}[/]"
+    body = f"[{CSS_COLORS['accent']}]{glyph}[/] [dim]{escape(name)} … [/][{CSS_COLORS['success']}]✓[/]"
+    if detail:
+        body += f" [dim]{escape(detail)}[/]"
+    return body
+
+
+class BootChecklist(Static):
+    """Animated subsystem checklist rendered above the welcome card on boot.
+
+    One line every BOOT_DELAY seconds (Textual interval — pilot-safe), each
+    a `◆ <name> … ✓ <detail>` line; failures show `✗ <reason>` in amber and
+    NEVER crash boot. Stays visible above the welcome card as a run log.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__("", **kwargs)
+        self._checks: list[dict[str, str]] = []
+        self._revealed = 0
+        self._done = False
+
+    def on_mount(self) -> None:
+        self.add_class("boot-checklist")
+        self.set_interval(0.15, self._tick)
+        self._tick()  # first line immediately
+
+    def _tick(self) -> None:
+        if self._done:
+            return
+        if not self._checks:
+            try:
+                self._checks = collect_boot_checks()
+            except Exception:
+                self._checks = [{"name": "boot", "status": "fail", "detail": "probes unavailable"}]
+        self._revealed = min(self._revealed + 1, len(self._checks))
+        if self._revealed >= len(self._checks):
+            self._done = True
+        self._render_lines()
+
+    def _render_lines(self) -> None:
+        glyph = "◆"
+        lines = [format_boot_line(c, glyph) for c in self._checks[: self._revealed]]
+        self.update("\n".join(lines) if lines else "")
 
 
 # --- side panels --------------------------------------------------------------
@@ -594,7 +935,9 @@ class ThinkingPanel(CollapsiblePanel):
 
     def _update_header(self) -> None:
         try:
-            self.query_one(".panel-header", Static).update(f"THINKING [dim]· {len(self._steps)}[/]")
+            running = any(step.status == "running" for step in self._steps)
+            suffix = f"  [{CSS_COLORS['accent']}]◆ working…[/]" if running else ""
+            self.query_one(".panel-header", Static).update(f"THINKING [dim]· {len(self._steps)}[/]{suffix}")
         except Exception:
             pass
 
@@ -614,7 +957,9 @@ class ThinkingPanel(CollapsiblePanel):
                 if duration_ms is not None:
                     block.step.duration_ms = duration_ms
                 block.refresh_step()
+                self._update_header()
                 return
+        self._update_header()
 
     def clear(self) -> None:
         self._steps = []
@@ -880,6 +1225,8 @@ class SlashCommandDropdown(Container):
 
     COMMANDS: list[tuple[str, str]] = [
         ("/help", "Show help"),
+        ("/settings", "Open settings (theme, timestamps, spinners)"),
+        ("/theme", "Switch theme (cycle or /theme <name>)"),
         ("/skills", "Match bundled skills for a task"),
         ("/init", "Scan this project and generate NEXUS.md context"),
         ("/clear", "Clear chat history"),
@@ -1012,8 +1359,47 @@ class SystemMonitor(Horizontal):
             yield Static("", classes="system-metric")
 
 
+# ── git helpers ──────────────────────────────────────────────────────────────
+
+_git_branch_cache: dict[str, str] = {}
+
+
+def get_git_branch(cwd: str | None = None, timeout: float = 2.0) -> str:
+    """Branch name for `cwd` via cached `git rev-parse --abbrev-ref HEAD`.
+
+    `—` when outside a repo, on timeout, or when git is missing. The result
+    is cached per directory: the status bar re-renders on every pulse tick,
+    and forking git 2×/s on a phone is exactly the kind of tax we avoid.
+    """
+    cwd = cwd or os.getcwd()
+    if cwd in _git_branch_cache:
+        return _git_branch_cache[cwd]
+    branch = "—"
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode == 0:
+            branch = (result.stdout or "").strip() or "—"
+    except Exception:
+        branch = "—"
+    _git_branch_cache[cwd] = branch
+    return branch
+
+
+def clear_git_branch_cache() -> None:
+    """Drop the cache (tests; and a cheap way to re-probe after /clear)."""
+    _git_branch_cache.clear()
+
+
 class StatusBar(Static):
-    """Bottom status line: pulse dot · model · provider · context % · tokens · cwd."""
+    """Bottom status line: pulse dot · model · provider · context % · tokens
+    · git branch · session · cwd — one line even at Termux widths, with the
+    flexible tail parts truncated gracefully when the budget runs out."""
 
     def __init__(self, version: str = "0.1.0", model: str = "", provider: str = "", project: str = "", termux: bool = False, battery: int = 100, **kwargs):
         super().__init__(**kwargs)
@@ -1043,40 +1429,105 @@ class StatusBar(Static):
             return f"{n / 1000:.1f}k"
         return str(n)
 
-    def render(self) -> str:
+    def _render_parts(self) -> list[tuple[str, str, bool]]:
+        """(raw_text, markup_template, flexible) parts for the status line.
+
+        Flexible parts (session, cwd, message) are truncated first when the
+        line exceeds the terminal width; everything else stays intact.
+        """
         state = get_state_manager().state
         pulse = "●" if self._pulse_state < 2 else "◌"
         pulse_color = CSS_COLORS["accent"] if state.is_busy else CSS_COLORS["text_dim"]
 
-        parts = [f"[{pulse_color}]{pulse}[/] [dim]nexus[/]"]
+        parts: list[tuple[str, str, bool]] = [
+            (pulse, f"[{pulse_color}]{{}}[/]", False),
+            ("nexus", "[dim]{}[/]", False),
+        ]
         # model • provider, graceful "no provider" state. When a provider is
         # configured, its NAME renders in the provider's brand color with a
         # matching dot — the identity follows the connected brain.
         if self.model:
-            parts.append(f"[bold]{self.model}[/]")
+            # Flexible: a long model id is truncated LAST (after session/cwd)
+            # so a 43-char model never pushes the line past the Termux width.
+            parts.append((self.model, "[bold]{}[/]", True))
         else:
-            parts.append("[dim]no model[/]")
+            parts.append(("no model", "[dim]{}[/]", False))
         if self.provider:
             brand = get_provider_brand_color(self.provider)
-            parts.append(f"[{brand}]●[/] [{brand}]{escape(self.provider)}[/]")
+            parts.append(("●", f"[{brand}]{{}}[/]", False))
+            parts.append((self.provider, f"[{brand}]{{}}[/]", True))
         else:
-            parts.append("[dim]no provider[/]")
+            parts.append(("no provider", "[dim]{}[/]", False))
 
         # context-used %
         if state.max_context_tokens > 0 and state.context_tokens > 0:
             pct = min(1.0, state.context_tokens / state.max_context_tokens)
             color = CSS_COLORS["success"] if pct < 0.7 else CSS_COLORS["warning"] if pct < 0.9 else CSS_COLORS["error"]
-            parts.append(f"[{color}]ctx {pct:.0%}[/]")
+            parts.append((f"ctx {pct:.0%}", f"[{color}]{{}}[/]", False))
         if state.total_tokens:
-            parts.append(f"[dim]{self._fmt_tokens(state.total_tokens)} tok[/]")
+            parts.append((f"{self._fmt_tokens(state.total_tokens)} tok", "[dim]{}[/]", False))
+
+        # git branch — '—' outside a repo (cached; a fork per pulse would
+        # tax a phone). Rendered dim and only when inside a repo.
+        branch = get_git_branch()
+        if branch and branch != "—":
+            parts.append((f"⎇ {branch}", "[dim]{}[/]", True))
+
+        # short session id, when a session exists
+        if state.session_id:
+            parts.append((f"#{state.session_id[:8]}", "[dim]{}[/]", True))
 
         cwd = self.project or os.path.basename(os.getcwd())
-        parts.append(f"[dim]{cwd}[/]")
+        if cwd:
+            parts.append((cwd, "[dim]{}[/]", True))
 
         if self.termux and self.battery >= 0:
             icon = "●" if self.battery > 50 else "◐" if self.battery > 20 else "○"
-            parts.append(f"{icon} {self.battery}%")
+            parts.append((f"{icon} {self.battery}%", "{}", False))
         if self.message:
-            parts.append(f"[dim]{escape(self.message)}[/]")
+            parts.append((self.message, "[dim]{}[/]", True))
 
-        return f" [dim]·[/] ".join(parts)
+        return parts
+
+    @staticmethod
+    def _join_fitted(parts: list[tuple[str, str, bool]], max_width: int) -> str:
+        """Join parts with ' · '; over budget, truncate flexible parts from
+        the tail (with an ellipsis) until it fits, then drop the rest.
+
+        max_width <= 0 means unlimited (unmounted bars in unit tests).
+        """
+        def assemble(parts: list[tuple[str, str, bool]]) -> str:
+            return " · ".join(t.format(escape(p)) for p, t, _ in parts)
+
+        if max_width <= 0:
+            return assemble(parts)
+        sep_len = 3
+        budget = max_width - 4  # '#status-bar' padding: 0 2 (both sides)
+
+        def total(parts):
+            if not parts:
+                return 0
+            return sum(len(p) for p, _, _ in parts) + sep_len * (len(parts) - 1)
+
+        parts = list(parts)
+        while total(parts) > budget:
+            # Find the last flexible part; shrink it, or drop it if tiny.
+            for i in range(len(parts) - 1, -1, -1):
+                raw, template, flexible = parts[i]
+                if not flexible:
+                    continue
+                overflow = total(parts) - budget
+                keep = len(raw) - overflow - 1
+                if keep >= 4:
+                    parts[i] = (raw[:keep].rstrip() + "…", template, True)
+                else:
+                    parts.pop(i)
+                break
+            else:
+                break  # nothing flexible left — let it overflow
+        return assemble(parts)
+
+    def render(self) -> str:
+        parts = self._render_parts()
+        width = self.size.width if self.size and self.size.width > 0 else 0
+        return self._join_fitted(parts, width)

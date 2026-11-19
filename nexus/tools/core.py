@@ -3,6 +3,8 @@
 import asyncio
 import difflib
 import os
+import re
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -407,13 +409,61 @@ class ListTool(BaseTool):
 
 
 class BashTool(BaseTool):
-    """Execute shell commands."""
+    """Execute shell commands.
+
+    Guardrails — and their honest limits:
+
+    1. Every command passes the SafetyEngine denylist BEFORE execution.
+       BLOCK-level rules (``rm -rf /``, fork bombs, ``mkfs``, raw ``dd``
+       disk writes, ``chmod 777 /``, force pushes, ...) return a ToolResult
+       error and the command is never run.
+    2. Commands matching DESTRUCTIVE_PATTERNS below (irreversible
+       operations: shutdown/reboot, raw disk writes, fork bombs, recursive
+       chmod on /) are not executed either — they come back flagged for
+       explicit user approval via ``metadata={"action": "require_approval",
+       ...}``, the same channel the orchestrator and TUI already use for
+       diff approval.
+
+    This is NOT a container, VM, or chroot: approved commands execute with
+    the full privileges of the Nexus user on the host, and a shell command
+    can still touch any path the user can touch. LOCAL_SANDBOX mode
+    restricts tool *paths* through the safety engine but cannot confine a
+    shell command's side effects. It is a denylist + approval gate — treat
+    bash execution as trusted-host, not sandboxed.
+    """
+
+    # Irreversible / destructive command patterns (label, case-insensitive
+    # regex). A match never executes; it flags the command for explicit
+    # user approval instead. Fork bombs / mkfs / raw-dd are additionally
+    # hard-BLOCKed by the safety engine, so approval can't rehabilitate
+    # those — this list is the broader confirmation net on top of it.
+    DESTRUCTIVE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+        (label, re.compile(pattern, re.IGNORECASE))
+        for label, pattern in (
+            ("fork bomb", r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:&\s*\}\s*;\s*:"),
+            ("raw disk write (dd to device)", r"\bdd\s[^|;&]*\bof=/dev/(?:sd|hd|nvme|vd|mmcblk|disk)"),
+            ("raw disk write (redirect to device)", r">\s*/dev/(?:sd[a-z]|hd[a-z]|nvme\d|mmcblk\d+|disk\d*)\b"),
+            ("filesystem format (mkfs)", r"\bmkfs(?:\.[a-z0-9]+)?\b"),
+            ("system power control", r"\b(?:shutdown|reboot|halt|poweroff)\b"),
+            ("system power control (init)", r"\binit\s+[06]\b"),
+            ("system power control (systemctl)", r"\bsystemctl\s+(?:reboot|poweroff|halt|suspend)\b"),
+            ("recursive chmod on /", r"\bchmod\s+(?:-[a-z]*r[a-z]*\s+)?[0-7]{3,4}\s+/(?:\s|$)"),
+        )
+    )
+
+    @classmethod
+    def _match_destructive(cls, command: str) -> str | None:
+        """Return the label of the first destructive pattern matched, if any."""
+        for label, pattern in cls.DESTRUCTIVE_PATTERNS:
+            if pattern.search(command):
+                return label
+        return None
 
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="bash",
-            description="Execute a shell command. Use for running scripts, build tools, git, and other command-line tools.",
+            description="Execute a shell command. Use for running scripts, build tools, git, and other command-line tools. Safety-checked first: denylisted and destructive/irreversible commands are blocked or require explicit user approval.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -445,7 +495,7 @@ class BashTool(BaseTool):
         description: str | None = None,
         **kwargs,
     ) -> ToolResult:
-        # Check safety first
+        # Check safety first (denylist: BLOCK rules never execute)
         from ..safety import get_safety_engine
 
         safety = get_safety_engine()
@@ -456,12 +506,34 @@ class BashTool(BaseTool):
         if not proceed:
             return ToolResult(success=False, content="", error=reason)
 
+        # Destructive / irreversible commands are never auto-run: flag them
+        # for the interactive approval flow (same metadata contract as the
+        # diff tool — the orchestrator pauses and surfaces a pending
+        # approval instead of executing).
+        destructive = self._match_destructive(command)
+        if destructive:
+            return ToolResult(
+                success=True,
+                content=f"APPROVAL_REQUIRED\nCommand: {command}\nReason: irreversible operation detected ({destructive})",
+                metadata={
+                    "action": "require_approval",
+                    # The orchestrator's approval message interpolates
+                    # metadata["path"]; a shell command has no single path.
+                    "path": "",
+                    "command": command,
+                    "requires_permission": True,
+                    "approval_reason": destructive,
+                },
+            )
+
         try:
             cwd = workdir if workdir else os.getcwd()
-            # If in sandbox mode, enforce directory restriction
-            if safety.get_mode() == "sandbox":
-                # Implementation of restricted chroot/shell jail would go here
-                pass
+            # NOTE: There is deliberately no "sandbox" branch here. The
+            # previous code had `if safety.get_mode() == "sandbox": pass` —
+            # a no-op that implied confinement which does not exist. A shell
+            # command runs with this process's privileges; the denylist +
+            # approval gate above is the whole honest guardrail (see the
+            # class docstring for what this is NOT).
 
             process = await asyncio.create_subprocess_shell(
                 command,
@@ -901,13 +973,34 @@ class CodeSearchTool(BaseTool):
 
 
 class GitTool(BaseTool):
-    """Git operations."""
+    """Git operations.
+
+    Security: the command string is parsed with ``shlex.split`` and executed
+    as an argument list (``subprocess.run(["git", ...], shell=False)``) —
+    never through a shell. Arguments are validated before execution:
+    control characters (newlines), shell metacharacters (``; | & $ > <``,
+    backticks) and git options that execute external commands (``-c``,
+    ``--upload-pack``, ``--receive-pack``, ``--exec``/``-x``) are rejected
+    with a clear ToolResult error. A hostile model- or user-supplied string
+    can therefore neither inject shell syntax nor smuggle a git option that
+    runs a command. Commands also pass the SafetyEngine denylist, so
+    BLOCK-level rules (force push, hardcoded secrets, ...) apply here too.
+    """
+
+    # Git options that cause git itself to launch an external command
+    # (config aliases with !, alternate pack hooks, rebase exec). Never
+    # needed for safe VCS work — rejected outright.
+    DENIED_OPTIONS = frozenset({"-c", "--exec", "-x", "--upload-pack", "--receive-pack"})
+
+    # Flags are dash + word chars, optionally "flag=value". Anything looser
+    # than that is treated as a malformed option and rejected.
+    _OPTION_RE = re.compile(r"-{1,2}[A-Za-z0-9][A-Za-z0-9._-]*")
 
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="git",
-            description="Execute git commands. Use for status, diff, commit, branch, and other git operations.",
+            description="Execute git commands. Use for status, diff, commit, branch, and other git operations. Arguments are validated and executed without a shell; shell metacharacters and command-executing git options are rejected.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -922,21 +1015,74 @@ class GitTool(BaseTool):
                 },
                 "required": ["command"],
             },
+            requires_permission=True,
             category="vcs",
         )
 
+    def _first_invalid_arg(self, tokens: list[str]) -> str | None:
+        """Return an error message for the first invalid argument, else None.
+
+        Refs and paths arrive as plain tokens; anything starting with ``-``
+        is treated as an option and must look like a real flag and not come
+        from DENIED_OPTIONS (so a hostile "ref" like ``--upload-pack=evil``
+        is rejected instead of being forwarded to git).
+        """
+        for tok in tokens:
+            # Newlines/control characters would smuggle a second command the
+            # moment any shell is involved downstream.
+            if "\n" in tok or "\r" in tok or "\x00" in tok or any(ord(c) < 32 for c in tok):
+                return f"control character in argument {tok[:60]!r}"
+            for ch in (";", "|", "&", "$", ">", "<", "`"):
+                if ch in tok:
+                    return f"shell metacharacter {ch!r} in argument {tok[:60]!r}"
+            if tok == "--":  # standard pathspec separator — harmless
+                continue
+            if tok.startswith("-"):
+                base = tok.split("=", 1)[0]
+                if base in self.DENIED_OPTIONS:
+                    return f"option {base} can execute external commands"
+                if not self._OPTION_RE.fullmatch(base):
+                    return f"malformed option {tok[:60]!r}"
+        return None
+
     async def execute(self, command: str, workdir: str | None = None, **kwargs) -> ToolResult:
         try:
+            if not command or not command.strip():
+                return ToolResult(success=False, content="", error="No git command provided")
+
+            # Parse to an argument list; a string is never handed to a shell.
+            try:
+                tokens = shlex.split(command)
+            except ValueError as e:
+                return ToolResult(success=False, content="", error=f"Could not parse git command: {e}")
+
+            invalid = self._first_invalid_arg(tokens)
+            if invalid:
+                return ToolResult(
+                    success=False,
+                    content="",
+                    error=f"Git command rejected: {invalid}. Re-run with plain refs/paths and no shell syntax.",
+                )
+
+            # Same denylist gate as BashTool: BLOCK-level safety rules
+            # (force push, hardcoded secrets, ...) apply to git commands.
+            from ..safety import get_safety_engine
+
+            safety = get_safety_engine()
+            violations = safety.check({"tool": "git", "command": f"git {command}"})
+            proceed, reason = safety.should_proceed(violations)
+            if not proceed:
+                return ToolResult(success=False, content="", error=reason)
+
             cwd = workdir if workdir else os.getcwd()
 
-            full_command = f"git {command}"
-
             result = subprocess.run(
-                full_command,
-                shell=True,
+                ["git", *tokens],
+                shell=False,  # explicit: argument-list execution only
                 capture_output=True,
                 text=True,
                 cwd=cwd,
+                timeout=60,
             )
 
             output = result.stdout if result.stdout else result.stderr
@@ -944,8 +1090,12 @@ class GitTool(BaseTool):
             return ToolResult(
                 success=result.returncode == 0,
                 content=output or "(no output)",
-                metadata={"exit_code": result.returncode, "command": full_command},
+                metadata={"exit_code": result.returncode, "command": f"git {command}"},
             )
+        except subprocess.TimeoutExpired:
+            return ToolResult(success=False, content="", error="Git command timed out after 60 seconds")
+        except FileNotFoundError:
+            return ToolResult(success=False, content="", error="git is not installed or not on PATH")
         except Exception as e:
             return ToolResult(success=False, content="", error=sanitize_error(e))
 

@@ -2,12 +2,80 @@
 
 import json
 import logging
+import os
 import time
 
 from flask import Flask, Response, jsonify, render_template, request, send_from_directory, stream_with_context
 
+from .auth import TOKEN_HEADER, DashboardAuth
+
 app = Flask(__name__, template_folder="templates", static_folder="static")
 logger = logging.getLogger(__name__)
+
+# One auth state per dashboard process. The token is generated once at
+# first use and cached; tests reset this via `app._auth = None`.
+_auth: DashboardAuth | None = None
+
+
+def get_auth() -> DashboardAuth:
+    global _auth
+    if _auth is None:
+        _auth = DashboardAuth()
+    return _auth
+
+
+@app.before_request
+def check_dashboard_auth():
+    """Gate mutating routes behind the dashboard token.
+
+    Default (local-first): GET/HEAD/OPTIONS stay open; POST/PUT/DELETE —
+    i.e. every route that triggers agent runs, spawns agents, writes
+    project files, installs MCP servers or saves config — requires the
+    ``X-Nexus-Token`` header. With ``dashboard_auth: strict`` every /api
+    route, GET included, requires it. The page shell and static assets
+    stay reachable in both modes so the UI can load and show the token
+    prompt on 401.
+
+    The token is never logged here (no per-request logging) — it is
+    printed exactly once by create_app() at startup.
+    """
+    auth = get_auth()
+    if not auth.check_request(request.method, request.path, request.headers.get(TOKEN_HEADER)):
+        return (
+            jsonify(
+                {
+                    "error": "unauthorized",
+                    "hint": f"Send the dashboard token in the {TOKEN_HEADER} header "
+                    f"(printed once at startup, stored at {auth.token_path}).",
+                }
+            ),
+            401,
+        )
+    return None
+
+
+def create_app() -> Flask:
+    """Return the dashboard Flask app, printing the auth summary once.
+
+    Standard local-dev flow (like Jupyter): the token value is printed a
+    single time to the local console so the user can paste it into the web
+    UI. It is never logged again — per-request logging would leak it into
+    any log file the dashboard writes.
+    """
+    auth = get_auth()
+    token = auth.get_token()
+    from_env = " (from NEXUS_DASHBOARD_TOKEN)" if os.environ.get("NEXUS_DASHBOARD_TOKEN") else ""
+    mode = "STRICT — all routes (including GET) require the token" if auth.is_strict_mode() else "standard — mutating routes require the token, reads are open"
+    line = "=" * 64
+    print(line)
+    print("GIA dashboard authentication")
+    print(f"  mode : {mode}")
+    print(f"  token: {token}{from_env}")
+    print(f"  file : {auth.token_path} (chmod 600)")
+    print("  set dashboard_auth: strict in ~/.nexus/config.json (or")
+    print("  NEXUS_DASHBOARD_AUTH=strict) to lock down reads too")
+    print(line)
+    return app
 
 
 def _get_api():

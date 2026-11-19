@@ -7,11 +7,11 @@ from typing import Any
 
 import click
 
+from nexus.discovery import ensure_dependency  # skip-if-present wrapper (see discovery.py)
 from nexus import __version__
 from nexus.config import NexusConfig, save_config
 from nexus.providers import Message, get_manager
 from nexus.tools import get_registry
-from nexus.utils.dependencies import ensure_dependency
 from nexus.voice import get_voice_engine, list_tts_voices
 
 _style = click.style
@@ -1254,30 +1254,49 @@ def mcp():
 
 
 @mcp.command("list")
-def mcp_list():
+@click.option("--quick", is_flag=True, default=False, help="Config-only snapshot (don't start servers)")
+def mcp_list(quick: bool) -> None:
     """List configured MCP servers and their tools."""
-    from nexus.mcp import MCPClient, MCPServerConfig
+    from nexus.mcp import collect_server_status, default_config_path
 
-    client = MCPClient()
-    config_path = Path.home() / ".nexus" / "mcp-servers.json"
-    if config_path.exists():
-        import json
-        servers = json.loads(config_path.read_text())
-        for name, cfg in servers.items():
-            click.echo(f"\n  {name} ({cfg.get('transport', 'stdio')})")
-            click.echo(f"    Command: {cfg.get('command', cfg.get('url', 'N/A'))}")
-            try:
-                client.add_server(MCPServerConfig(name=name, **cfg))
-                import asyncio
-                asyncio.run(client.initialize_server(name))
-                tools = [t for t in client.list_tools() if t.server_name == name]
-                for t in tools:
-                    click.echo(f"    → {t.name}: {t.description or 'No description'}")
-            except Exception as e:
-                click.echo(f"    Error: {e}")
-    else:
+    config_path = default_config_path()
+    try:
+        status = collect_server_status(config_path, connect=not quick)
+    except Exception as e:
+        click.echo(f"  {_style('✘', 'red')} Could not read MCP config: {e}")
+        return
+    if not status:
         click.echo("No MCP servers configured.")
         click.echo(f"  Create {config_path} or use 'nexus mcp add'.")
+        return
+
+    connected = sum(1 for s in status if s.get("connected"))
+    total_tools = sum(s.get("tool_count", 0) for s in status)
+    mode = "config snapshot" if quick else "connected"
+    click.echo(f"\n  {_style('MCP Servers', 'cyan', bold=True)} "
+               f"({len(status)} · {connected} {mode} · {total_tools} tools)")
+    click.echo(f"  {_style('─' * 50, 'bright_black')}")
+    for s in status:
+        if s.get("connected"):
+            mark = _style("●", "green")
+        elif s.get("error"):
+            mark = _style("✗", "red")
+        else:
+            mark = _style("○", "bright_black")
+        transport = s.get("transport", "stdio")
+        click.echo(f"  {mark} {_style(s['name'], bold=True)} "
+                   + _style(f"({transport})", "bright_black"))
+        target = s.get("target") or "N/A"
+        click.echo(f"    {_style('target:', 'bright_black')} {target}")
+        if s.get("error"):
+            click.echo(f"    {_style('error:', 'bright_black')} {s['error']}")
+        click.echo(f"    {_style('tools:', 'bright_black')} {s.get('tool_count', 0)}")
+        for t in s.get("tools", [])[:10]:
+            click.echo(f"      {_style('→', 'bright_black')} {t}")
+        extra = len(s.get("tools", [])) - 10
+        if extra > 0:
+            click.echo(f"      {_style(f'… {extra} more', 'bright_black')}")
+    click.echo()
 
 
 @mcp.command("add")
@@ -1290,7 +1309,8 @@ def mcp_add(name: str, command: str | None, args: str | None, url: str | None, t
     """Add an MCP server configuration."""
     import json
 
-    config_path = Path.home() / ".nexus" / "mcp-servers.json"
+    from nexus.mcp import default_config_path
+    config_path = default_config_path()
     servers = {}
     if config_path.exists():
         servers = json.loads(config_path.read_text())
@@ -1403,7 +1423,8 @@ def mcp_install(name: str):
             click.echo(f"No MCP server named '{name}' in the catalog. Try 'nexus mcp search {name}'.")
             return
 
-    config_path = Path.home() / ".nexus" / "mcp-servers.json"
+    from nexus.mcp import default_config_path
+    config_path = default_config_path()
     servers = {}
     if config_path.exists():
         servers = json.loads(config_path.read_text())
@@ -1436,7 +1457,8 @@ def mcp_remove(name: str):
     """Remove an MCP server configuration."""
     import json
 
-    config_path = Path.home() / ".nexus" / "mcp-servers.json"
+    from nexus.mcp import default_config_path
+    config_path = default_config_path()
     if not config_path.exists():
         click.echo("No MCP servers configured.", err=True)
         return
@@ -1496,6 +1518,39 @@ def exec_cmd(command: tuple[str, ...], timeout: int, shell: bool) -> None:
 def skill():
     """Manage skills (local and community)."""
     pass
+
+
+# Alias so both `nexus skill ...` and `nexus skills ...` work (the REPL uses
+# /skills, docs say `nexus skills match`).
+cli.add_command(skill, "skills")
+
+
+@skill.command("match")
+@click.argument("task", required=True)
+def skill_match(task: str) -> None:
+    """Show bundled skills relevant to TASK (offline keyword matcher)."""
+    from nexus.skills.matcher import get_skill_matcher
+
+    try:
+        matcher = get_skill_matcher()
+        matcher.ensure_index()
+        matches = matcher.match(task)
+    except Exception as e:
+        click.echo(f"  {_style('✘', 'red')} Skill matcher failed: {e}")
+        return
+    if not matches:
+        click.echo(f"No bundled skills match '{task}'.")
+        click.echo(f"  {_style(f'{matcher.skill_count} skills indexed — try different wording.', 'bright_black')}")
+        return
+    click.echo(f"\n  {_style('Skills matching', 'cyan', bold=True)} '{task}'")
+    for m in matches:
+        click.echo(f"    {_style('▸', 'cyan')} {_style(m.name, bold=True)}  "
+                   + _style(f"score {m.score}", "bright_black"))
+        desc = " ".join(m.description.split())
+        click.echo(f"      {_style(desc[:100], 'bright_black')}")
+        if m.matched_tokens:
+            click.echo(f"      {_style('matched: ' + ', '.join(m.matched_tokens), 'bright_black')}")
+    click.echo()
 
 
 @skill.command("list")
@@ -2431,6 +2486,119 @@ def plugin_remove(name: str) -> None:
 
 
 # =============================================================================
+# discover — environment auto-discovery (what Nexus detected about this device)
+# =============================================================================
+
+
+@cli.command("discover")
+@click.option("--refresh", is_flag=True, help="Force a fresh scan (bypass the 24h cache)")
+def discover(refresh: bool) -> None:
+    """Auto-discover this device: platform, capabilities, PATH tools, project."""
+    from nexus.discovery import discover_environment, familiarize_project
+
+    try:
+        profile = discover_environment(force=refresh)
+    except Exception as e:
+        click.echo(f"  {_style('✘', 'red')} Environment discovery failed: {e}")
+        return
+
+    cache_note = _style(" (stale cache — refresh failed)", "yellow") if profile.stale else ""
+    click.echo(f"\n  {_style('Nexus Environment', 'cyan', bold=True)}{cache_note}")
+    click.echo(f"  {_style('─' * 50, 'bright_black')}")
+    detail = f" — {profile.platform_detail}" if profile.platform_detail else ""
+    click.echo(f"  {_style('▸', 'cyan')} Platform:    {profile.platform}{detail}")
+    click.echo(f"  {_style('▸', 'cyan')} Python:      {profile.python_version} ({profile.python_executable})")
+    click.echo(f"  {_style('▸', 'cyan')} Shell:       {profile.shell}")
+    sys_parts = []
+    if profile.cpu_cores:
+        sys_parts.append(f"{profile.cpu_cores} cores")
+    if profile.ram_total_mb:
+        sys_parts.append(f"{profile.ram_total_mb} MB RAM")
+        if profile.ram_available_mb is not None:
+            sys_parts[-1] += f" ({profile.ram_available_mb} available)"
+    click.echo(f"  {_style('▸', 'cyan')} System:      {' / '.join(sys_parts) or 'unknown'}")
+
+    present = profile.present_capabilities()
+    missing = profile.missing_capabilities()
+    cap_bits = ", ".join(present) if present else "none"
+    click.echo(f"  {_style('▸', 'cyan')} Capabilities ({len(present)} present)")
+    click.echo(f"      {_style(cap_bits, 'bright_black')}")
+    if missing:
+        click.echo(f"      {_style('missing: ' + ', '.join(missing), 'yellow')}")
+
+    found_tools = profile.present_tools()
+    absent_tools = profile.missing_tools()
+    click.echo(f"  {_style('▸', 'cyan')} PATH tools ({len(found_tools)} found)")
+    tool_bits = "  ".join(found_tools) if found_tools else "none"
+    click.echo(f"      {_style(tool_bits, 'bright_black')}")
+    if absent_tools:
+        click.echo(f"      {_style('not found: ' + ', '.join(absent_tools), 'yellow')}")
+
+    try:
+        project = familiarize_project()
+    except Exception:
+        project = {}
+    click.echo(f"  {_style('▸', 'cyan')} Project:     {project.get('path', '.')}")
+    langs = project.get("languages") or []
+    lang_bits = ", ".join(f"{l['language']} ({l['files']})" for l in langs)
+    proj_bits = []
+    if lang_bits:
+        proj_bits.append(lang_bits)
+    if project.get("manifest_count"):
+        proj_bits.append(f"{project['manifest_count']} manifests")
+    if project.get("git_branch"):
+        proj_bits.append(f"git@{project['git_branch']}")
+    if project.get("has_nexus_md"):
+        proj_bits.append("NEXUS.md")
+    click.echo(f"      {_style(' · '.join(proj_bits) or 'empty directory', 'bright_black')}")
+    click.echo(f"\n  {_style('Cache:', 'bright_black')} ~/.nexus/environment.json "
+               f"{_style('(nexus discover --refresh to re-scan)', 'bright_black')}\n")
+
+
+# =============================================================================
+# plugins — drop-in tool plugins (~/.nexus/plugins, auto-discovered)
+# =============================================================================
+
+
+@cli.command("plugins")
+@click.option("--reload", "reload_plugins_flag", is_flag=True, help="Re-scan the plugin directory first")
+def plugins_cli(reload_plugins_flag: bool) -> None:
+    """List auto-discovered tool plugins (drop .py files in ~/.nexus/plugins/)."""
+    from nexus.plugins import default_plugins_dir, list_plugins, reload_plugins
+
+    records = reload_plugins() if reload_plugins_flag else list_plugins()
+    loaded = [r for r in records if r.ok]
+    failed = [r for r in records if not r.ok]
+    tool_count = sum(len(r.tools) for r in loaded)
+
+    click.echo(f"\n  {_style('Tool Plugins', 'cyan', bold=True)} "
+               f"({len(records)} found · {len(loaded)} loaded · {tool_count} tools)")
+    click.echo(f"  {_style('─' * 50, 'bright_black')}")
+    if not records:
+        plugins_dir = default_plugins_dir()
+        click.echo(f"  {_style('No plugins discovered.', 'bright_black')}")
+        click.echo(f"  {_style('Drop .py files (or folders with plugin.py) in:', 'bright_black')} {plugins_dir}")
+        click.echo(f"  {_style('See examples/plugins/nexus-uptime.py for the contract.', 'bright_black')}")
+    for r in records:
+        if r.ok:
+            mark = _style("●", "green")
+        else:
+            mark = _style("✗", "red")
+        version = f" v{r.version}" if r.version else ""
+        tools = f"{len(r.tools)} tool(s)" if r.kind == "manifest" else "register()"
+        click.echo(f"  {mark} {_style(r.name, bold=True)}{_style(version, 'bright_black')}  "
+                   + _style(tools, "bright_black"))
+        if r.description:
+            click.echo(f"      {_style(r.description, 'bright_black')}")
+        if r.warnings:
+            for w in r.warnings:
+                click.echo(f"      {_style('⚠ ' + w, 'yellow')}")
+        if r.error:
+            click.echo(f"      {_style('error: ' + r.error, 'red')}")
+    click.echo()
+
+
+# =============================================================================
 # scan — standalone codebase scanner
 # =============================================================================
 
@@ -3053,9 +3221,10 @@ def main():
     # because no provider is configured yet. Only gate provider-dependent
     # commands (chat/REPL, TUI, agents, run) behind the setup flow.
     PROVIDER_INDEPENDENT_COMMANDS = {  # noqa: N806 -- intentionally constant-style
-        "mcp", "skill", "plugin", "config", "doctor", "auth", "completion",
-        "upgrade", "safety", "sync", "learn", "phone", "voice", "exec",
-        "termux", "self-improve", "self_improve", "init",
+        "mcp", "skill", "skills", "plugin", "plugins", "discover", "config",
+        "doctor", "auth", "completion", "upgrade", "safety", "sync", "learn",
+        "phone", "voice", "exec", "termux", "self-improve", "self_improve",
+        "init",
     }
     subcommand = sys.argv[1] if len(sys.argv) > 1 else None
     needs_provider_check = subcommand not in PROVIDER_INDEPENDENT_COMMANDS

@@ -163,3 +163,12 @@ def _register_core_tools(registry: ToolRegistry) -> None:
         register_mcp_tools(registry)
     except Exception:
         pass
+    try:
+        # Drop-in tool plugins from ~/.nexus/plugins (lazy: each plugin is
+        # imported in isolation inside loader.py — a broken plugin is listed
+        # with its error and never blocks core tools).
+        from ..plugins import register_plugin_tools
+
+        register_plugin_tools(registry)
+    except Exception:
+        pass

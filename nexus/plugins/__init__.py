@@ -239,3 +239,16 @@ def get_plugin_manager() -> PluginManager:
         _plugin_manager = PluginManager(plugins_dir=cfg.plugins_dir)
         _plugin_manager.discover()
     return _plugin_manager
+
+
+# ── drop-in tool-plugin loader (nexus/plugins/loader.py) ──────────────────
+# Re-exported here so plugin authors and the TUI can simply do:
+#     from nexus.plugins import list_plugins, register_plugin_tools
+from .loader import (  # noqa: E402  (kept last: hook plugins above, tools below)
+    PluginRecord,
+    default_plugins_dir,
+    discover_plugins,
+    list_plugins,
+    register_plugin_tools,
+    reload_plugins,
+)

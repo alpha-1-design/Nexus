@@ -10,6 +10,7 @@ import re
 import pytest
 
 from nexus.tui.colors import (
+    CSS_COLORS,
     DEFAULT_BRAND_COLOR,
     PROVIDER_BRAND_COLORS,
     format_provider_badge,
@@ -142,9 +143,12 @@ class TestWelcomeIdentitySelection:
         assert color == get_provider_brand_color("github")
         assert badge == "⬢ github-models · openai/gpt-4o-mini"
 
-    def test_no_provider_keeps_neutral_cyan_without_badge(self):
+    def test_no_provider_follows_theme_logo_tint_without_badge(self):
+        # No provider: the logo follows the active theme's logo_tint token
+        # (identical to the neutral cyan DEFAULT_BRAND_COLOR on the default
+        # theme; a connected provider still overrides in every theme).
         color, badge = resolve_welcome_identity("", "")
-        assert color == DEFAULT_BRAND_COLOR
+        assert color == CSS_COLORS["logo_tint"]
         assert badge is None
 
     def test_detect_active_provider_returns_pair(self):
