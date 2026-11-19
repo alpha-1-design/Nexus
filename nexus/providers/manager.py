@@ -84,6 +84,15 @@ class ProviderManager:
         self.on_rotation: Callable[[str], None] | None = None
         self.free_rotation: bool = True
 
+        # --- Per-provider circuit breaker (in-memory only) ---
+        # After `breaker_failure_threshold` consecutive failures a provider
+        # "opens": it is excluded from rotation for `breaker_open_seconds`,
+        # then half-open admits a single probe. Any success closes it again.
+        self.breaker_failure_threshold: int = 3
+        self.breaker_open_seconds: float = 120.0
+        self._breaker_failures: dict[str, int] = {}
+        self._breaker_opened_at: dict[str, float] = {}
+
         # Cost per million tokens (approximate)
         self.cost_rates: dict[str, dict[str, float]] = {
             "openai": {"input": 2.5, "output": 10.0},  # GPT-4o
@@ -130,6 +139,40 @@ class ProviderManager:
             return 0.0
         return left
 
+    # ================================================================
+    # Circuit breaker (per-provider consecutive failures)
+    # ================================================================
+
+    def breaker_state(self, name: str) -> str:
+        """Circuit state for a provider: 'closed', 'open' or 'half_open'."""
+        opened = self._breaker_opened_at.get(name)
+        if opened is None:
+            return "closed"
+        if time.monotonic() - opened >= self.breaker_open_seconds:
+            return "half_open"
+        return "open"
+
+    def _breaker_record_success(self, name: str) -> None:
+        """A success closes the circuit and clears the failure counter."""
+        self._breaker_failures.pop(name, None)
+        self._breaker_opened_at.pop(name, None)
+
+    def _breaker_record_failure(self, name: str) -> None:
+        """Count one failure; open the circuit once the threshold is hit."""
+        if self.breaker_state(name) != "closed":
+            # Half-open probe failed (or already open): (re)arm the timeout.
+            self._breaker_opened_at[name] = time.monotonic()
+            return
+        failures = self._breaker_failures.get(name, 0) + 1
+        if failures >= self.breaker_failure_threshold:
+            self._breaker_opened_at[name] = time.monotonic()
+            print(
+                f"  \033[33m⚡\033[0m circuit breaker opened for {name} after "
+                f"{failures} consecutive failures — paused {self.breaker_open_seconds:.0f}s"
+            )
+        else:
+            self._breaker_failures[name] = failures
+
     def _is_free(self, name: str) -> bool:
         """Registry free-flag for a configured provider name."""
         cfg = self.configs.get(name)
@@ -147,7 +190,11 @@ class ProviderManager:
         no cooldown (registry order), then paid ones (last resort). Cooling
         providers are excluded until their cooldown expires."""
         names = [n for n in self.configs if self.configs[n].enabled]
-        available = [n for n in names if self._cooldown_left(n) <= 0.0]
+        available = [
+            n
+            for n in names
+            if self._cooldown_left(n) <= 0.0 and self.breaker_state(n) != "open"
+        ]
         head = [active] if active in available else []
         tail = [n for n in available if n != active]
         if not self.free_rotation:
@@ -172,6 +219,7 @@ class ProviderManager:
     def _handle_failure(self, name: str, exc: BaseException) -> None:
         """Classify one provider failure: cooldown on rate limits, else plain
         fallback message (legacy behaviour for non-rate-limit errors)."""
+        self._breaker_record_failure(name)
         cyan, blue, dim, reset, yellow = "\033[36m", "\033[34m", "\033[90m", "\033[0m", "\033[33m"
         if self._is_rate_limit_error(exc):
             self._mark_cooldown(name)
@@ -296,6 +344,7 @@ class ProviderManager:
                         rates = self.cost_rates.get(name, {"input": 0, "output": 0})
                         self.cost_tracker.add_usage(response.usage, rates)
 
+                    self._breaker_record_success(name)
                     return response
                 except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
                     if attempt < max_retries:
@@ -343,9 +392,11 @@ class ProviderManager:
                 async for chunk in provider.stream(messages, tools, **kwargs):
                     emitted = True
                     yield chunk
+                self._breaker_record_success(name)
                 return
             except Exception as e:
                 last_error = e
+                self._breaker_record_failure(name)
                 if emitted:
                     # Output already reached the consumer — restarting another
                     # provider would duplicate it. Fail cleanly instead.

@@ -178,8 +178,14 @@ class Memory:
                 sessions.append(Session.from_dict(json.load(f)))
         return sessions
 
-    def add_fact(self, key: str, value: Any, category: str = "general", confidence: float = 1.0, project_id: str | None = None) -> None:
-        """Add a fact to memory, optionally scoped to a project."""
+    def add_fact(self, key: str, value: Any, category: str = "general", confidence: float = 1.0, project_id: str | None = None, source: str = "session") -> None:
+        """Add a fact to memory, optionally scoped to a project.
+
+        Dedup: facts live in a key->Fact dict, so storing under an existing
+        key updates that fact instead of growing the store. Auto-captured
+        preferences pass source="auto" and deterministic keys so repeated
+        statements are idempotent.
+        """
         if project_id:
             project_context = self.load_project_context(project_id) or {}
             facts = project_context.get("facts", {})
@@ -187,7 +193,7 @@ class Memory:
             project_context["facts"] = facts
             self.save_project_context(project_id, project_context)
         else:
-            self._facts[key] = Fact(key=key, value=value, category=category, confidence=confidence)
+            self._facts[key] = Fact(key=key, value=value, category=category, confidence=confidence, source=source)
             self._save_facts()
 
     def get_fact(self, key: str, project_id: str | None = None) -> Any | None:

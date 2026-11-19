@@ -12,17 +12,17 @@ Inspired by: Claude Code's lazy-loading MCP tools, Gemini CLI's ToolRegistry clo
 """
 
 import asyncio
+import http.client
 import json
 import os
 import re
 import subprocess
 import threading
+import urllib.parse
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-import httpx
 
 from ..tools.base import BaseTool, ToolDefinition, ToolRegistry, ToolResult
 
@@ -137,6 +137,7 @@ class MCPClient:
         self._initialized: set[str] = set()
         self._stderr_tails: dict[str, deque[str]] = {}
         self._stderr_threads: dict[str, threading.Thread] = {}
+        self._sse_endpoints: dict[str, str] = {}
         self._next_request_id = 1
         self.request_timeout = (
             request_timeout if request_timeout is not None else _DEFAULT_REQUEST_TIMEOUT
@@ -151,6 +152,7 @@ class MCPClient:
         self._stop_process(name)
         self._servers.pop(name, None)
         self._stderr_tails.pop(name, None)
+        self._sse_endpoints.pop(name, None)
         self._initialized.discard(name)
         self._tools = {k: v for k, v in self._tools.items() if v.server_name != name}
 
@@ -212,34 +214,186 @@ class MCPClient:
             self._stop_process(config.name)
             raise
 
-        for tool_data in tools_response.get("result", {}).get("tools", []):
-            if not isinstance(tool_data, dict) or "name" not in tool_data:
-                continue  # a malformed tool entry must not sink the whole server
-            self._tools[f"{config.name}/{tool_data['name']}"] = MCPTool(
-                name=tool_data["name"],
-                description=tool_data.get("description", ""),
-                input_schema=tool_data.get("inputSchema", {}) or {},
-                server_name=config.name,
-            )
+        self._register_server_tools(config.name, tools_response)
 
-    async def _init_sse(self, config: MCPServerConfig) -> None:
-        """Initialize an SSE-based MCP server."""
+    # ── SSE transport plumbing (stdlib http.client) ──────────────────────
+
+    def _sse_connection(self, url: str, timeout: float) -> tuple[http.client.HTTPConnection, str]:
+        """Open an HTTP(S) connection to `url`; returns (connection, request path)."""
+        parts = urllib.parse.urlsplit(url)
+        if not parts.scheme or not parts.netloc:
+            raise MCPServerError(f"Invalid SSE server URL: {url!r}")
+        conn_cls = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+        conn = conn_cls(parts.hostname, parts.port, timeout=timeout)
+        path = parts.path or "/"
+        if parts.query:
+            path += "?" + parts.query
+        return conn, path
+
+    def _sse_discover_endpoint(self, config: MCPServerConfig) -> str:
+        """GET {url}/sse and read the POST endpoint from the event stream.
+
+        MCP SSE servers announce where to POST JSON-RPC messages with an
+        ``event: endpoint`` / ``data: <uri>`` pair. Parsed line by line with
+        stdlib only; the stream is closed as soon as the endpoint is known
+        (a minimal client needs no further stream events).
+        """
+        conn = None
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{config.url}/initialize",
-                    json={
-                        "protocolVersion": _PROTOCOL_VERSION,
-                        "capabilities": {"tools": {}},
-                        "clientInfo": _CLIENT_INFO,
-                    },
-                    timeout=10.0,
+            parts = urllib.parse.urlsplit(config.url or "")
+            sse_path = (parts.path or "").rstrip("/")
+            if not sse_path.endswith("/sse"):
+                sse_path += "/sse"
+            conn, _ = self._sse_connection(config.url or "", self.request_timeout)
+            conn.request("GET", sse_path, headers={"Accept": "text/event-stream"})
+            resp = conn.getresponse()
+            if resp.status != 200:
+                raise MCPServerError(
+                    f"Server '{config.name}': SSE endpoint returned HTTP {resp.status}"
                 )
-                resp.raise_for_status()
+            event = ""
+            while True:
+                raw = resp.readline()
+                if not raw:
+                    break
+                line = raw.decode(errors="replace").strip()
+                if line.startswith("event:"):
+                    event = line[len("event:"):].strip()
+                elif line.startswith("data:") and event == "endpoint":
+                    target = line[len("data:"):].strip()
+                    if target:
+                        endpoint = urllib.parse.urljoin(config.url or "", target)
+                        self._sse_endpoints[config.name] = endpoint
+                        return endpoint
+            raise MCPServerError(
+                f"Server '{config.name}': SSE stream ended without an endpoint event"
+            )
+        except MCPServerError:
+            raise
+        except (OSError, http.client.HTTPException) as e:
+            raise MCPServerError(f"Server '{config.name}' SSE endpoint failed: {e}") from e
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def _sse_post(self, config: MCPServerConfig, payload: dict) -> dict | None:
+        """POST one JSON-RPC payload to the server's message endpoint.
+
+        Returns the parsed response object, or None when the server answers
+        without a body (e.g. 202 Accepted for notifications). Re-discovers the
+        endpoint once if a cached one stopped accepting connections.
+        """
+        endpoint = self._sse_endpoints.get(config.name)
+        for attempt in (1, 2):
+            if not endpoint:
+                endpoint = self._sse_discover_endpoint(config)
+            conn = None
+            try:
+                conn, path = self._sse_connection(endpoint, self.request_timeout)
+                body = json.dumps(payload).encode()
+                conn.request(
+                    "POST",
+                    path,
+                    body=body,
+                    headers={"Content-Type": "application/json", "Accept": "application/json"},
+                )
+                resp = conn.getresponse()
+                data = resp.read()
+                if resp.status not in (200, 202):
+                    snippet = data.decode(errors="replace")[:200]
+                    raise MCPServerError(
+                        f"Server '{config.name}': POST returned HTTP {resp.status}: {snippet}"
+                    )
+                if not data.strip():
+                    return None
+                try:
+                    message = json.loads(data)
+                except json.JSONDecodeError:
+                    raise MCPServerError(
+                        f"Server '{config.name}': non-JSON response to '{payload.get('method')}'"
+                    ) from None
+                if not isinstance(message, dict):
+                    raise MCPServerError(
+                        f"Server '{config.name}': unexpected response to '{payload.get('method')}'"
+                    )
+                return message
+            except MCPServerError:
+                raise
+            except (OSError, http.client.HTTPException) as e:
+                if attempt == 1 and self._sse_endpoints.pop(config.name, None):
+                    endpoint = None  # stale endpoint: discover again, retry once
+                    continue
+                raise MCPServerError(
+                    f"Server '{config.name}' request to '{payload.get('method')}' failed: {e}"
+                ) from e
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+        return None  # pragma: no cover — unreachable
+
+    async def _sse_request(
+        self, config: MCPServerConfig, method: str, params: dict | None = None
+    ) -> dict:
+        """POST a JSON-RPC request over the SSE transport, id-matched response."""
+        request_id = self._next_request_id
+        self._next_request_id += 1
+        payload = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}}
+        try:
+            message = await asyncio.get_event_loop().run_in_executor(
+                None, self._sse_post, config, payload
+            )
         except MCPServerError:
             raise
         except Exception as e:
-            raise MCPServerError(f"Server '{config.name}' initialize failed: {e}") from e
+            raise MCPServerError(f"Server '{config.name}' request failed: {e}") from e
+        if message is None:
+            raise MCPServerError(f"Server '{config.name}' sent no response for '{method}'")
+        if message.get("id") != request_id:
+            raise MCPServerError(
+                f"Server '{config.name}' returned a mismatched id for '{method}'"
+            )
+        if "error" in message:
+            error = message["error"]
+            detail = (
+                error.get("message", json.dumps(error)) if isinstance(error, dict) else str(error)
+            )
+            raise MCPServerError(
+                f"Server '{config.name}' returned an error for '{method}': {detail}"
+            )
+        return message
+
+    async def _sse_notify(self, config: MCPServerConfig) -> None:
+        """Send the initialized notification; a failure surfaces on the next request."""
+        payload = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+        try:
+            await asyncio.get_event_loop().run_in_executor(None, self._sse_post, config, payload)
+        except MCPServerError:
+            pass
+
+    async def _init_sse(self, config: MCPServerConfig) -> None:
+        """Initialize an SSE-based MCP server.
+
+        Handshake: GET {url}/sse to learn the POST endpoint, then JSON-RPC
+        initialize -> notifications/initialized -> tools/list over POSTs.
+        """
+        try:
+            await self._sse_request(config, "initialize", {
+                "protocolVersion": _PROTOCOL_VERSION,
+                "capabilities": {"tools": {}},
+                "clientInfo": _CLIENT_INFO,
+            })
+            await self._sse_notify(config)
+            tools_response = await self._sse_request(config, "tools/list", {})
+        except Exception:
+            self._sse_endpoints.pop(config.name, None)
+            raise
+        self._register_server_tools(config.name, tools_response)
 
     # ── stdio JSON-RPC plumbing ───────────────────────────────────────────
 
@@ -431,6 +585,24 @@ class MCPClient:
         except Exception as e:
             return ToolResult(success=False, content="", error=f"MCP call failed: {e}")
 
+        return self._tool_result_from_response(server_name, tool_name, response)
+
+    def _register_server_tools(self, server_name: str, tools_response: dict) -> None:
+        """Store the tools advertised by a tools/list response."""
+        for tool_data in tools_response.get("result", {}).get("tools", []):
+            if not isinstance(tool_data, dict) or "name" not in tool_data:
+                continue  # a malformed tool entry must not sink the whole server
+            self._tools[f"{server_name}/{tool_data['name']}"] = MCPTool(
+                name=tool_data["name"],
+                description=tool_data.get("description", ""),
+                input_schema=tool_data.get("inputSchema", {}) or {},
+                server_name=server_name,
+            )
+
+    def _tool_result_from_response(
+        self, server_name: str, tool_name: str, response: dict
+    ) -> ToolResult:
+        """Map a JSON-RPC tools/call result onto a ToolResult."""
         result = response.get("result", {})
         if not isinstance(result, dict):
             result = {}
@@ -448,19 +620,16 @@ class MCPClient:
         return ToolResult(success=True, content=text)
 
     async def _call_sse_tool(self, config: MCPServerConfig, tool_name: str, args: dict) -> ToolResult:
-        """Call a tool on an SSE MCP server."""
+        """Call a tool on an SSE MCP server (JSON-RPC over POST)."""
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{config.url}/tools/call",
-                    json={"name": tool_name, "arguments": args},
-                    timeout=30.0,
-                )
-                resp.raise_for_status()
-                result = resp.json()
-                return ToolResult(success=True, content=json.dumps(result))
+            response = await self._sse_request(
+                config, "tools/call", {"name": tool_name, "arguments": args}
+            )
+        except MCPServerError as e:
+            return ToolResult(success=False, content="", error=str(e))
         except Exception as e:
             return ToolResult(success=False, content="", error=f"MCP call failed: {e}")
+        return self._tool_result_from_response(config.name, tool_name, response)
 
     def list_tools(self) -> list[MCPTool]:
         """List all available MCP tools."""
@@ -475,6 +644,7 @@ class MCPClient:
         for name in list(self._processes):
             self._stop_process(name)
         self._stderr_tails.clear()
+        self._sse_endpoints.clear()
         self._initialized.clear()
 
 

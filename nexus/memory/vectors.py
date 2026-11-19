@@ -10,6 +10,8 @@ Architecture:
 import asyncio
 import importlib.util
 import json
+import math
+import re
 import sqlite3
 import threading
 import time
@@ -19,6 +21,99 @@ from pathlib import Path
 from typing import Any
 
 NUMPY_AVAILABLE = importlib.util.find_spec("numpy") is not None
+
+# ── BM25 lexical ranking (stdlib math only — no embeddings, no new deps) ──
+# This is lexical relevance: stemmed keyword overlap between query and stored
+# content/tags. Honest label: BM25, not semantic vector search.
+BM25_K1 = 1.5
+BM25_B = 0.75
+# Per-field weighting: tags are short and high-signal, so hits there count more.
+TAG_FIELD_WEIGHT = 1.5
+# Recency boost: newer entries score slightly higher (multiplicative, capped).
+RECENCY_BOOST_MAX = 0.25
+RECENCY_DECAY_DAYS = 14.0
+# Exact-phrase bonus: raw query substring hit in content.
+EXACT_PHRASE_BONUS = 1.5
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _tokenize(text: str) -> list[str]:
+    """Lowercase word tokens for BM25 fields."""
+    return _TOKEN_RE.findall((text or "").lower())
+
+
+def _stem(token: str) -> str:
+    """Light suffix stemming, same philosophy as skills/matcher.py: applied
+    identically to query and document sides, so consistency is what matters.
+    No real stemming library — just trailing inflections on longer tokens.
+    """
+    if len(token) <= 4:
+        return token
+    for suffix, repl in (("ies", "y"), ("sses", "s"), ("ing", ""), ("ed", ""), ("s", "")):
+        if token.endswith(suffix) and len(token) - len(suffix) >= 3:
+            return token[: len(token) - len(suffix)] + repl
+    return token
+
+
+def _bm25_rank(
+    query: str,
+    entries: list[tuple],
+    now: float,
+) -> list[tuple]:
+    """Rank stored entries against a query with per-field BM25.
+
+    `entries` is a list of (id, content, metadata, tags, created_at, access_count)
+    tuples. Returns the same tuples extended with a final score, sorted
+    descending. Scoring = sum over fields (content weight 1.0, tags weight
+    TAG_FIELD_WEIGHT) of field-local BM25, then:
+      - exact-phrase bonus when the raw query appears in the content,
+      - multiplicative recency boost that decays with entry age.
+    """
+    n = len(entries)
+    q_terms = [_stem(t) for t in _tokenize(query)]
+    scores = [0.0] * n
+
+    if q_terms:
+        for weight, get_field in ((1.0, lambda e: e[1]), (TAG_FIELD_WEIGHT, lambda e: (e[3] or "").replace(",", " "))):
+            docs_tokens = [_tokenize(get_field(e)) for e in entries]
+            total_len = sum(len(toks) for toks in docs_tokens)
+            avgdl = (total_len / n) or 1.0
+            df: dict[str, int] = {}
+            for toks in docs_tokens:
+                for term in set(toks):
+                    df[term] = df.get(term, 0) + 1
+            for i, toks in enumerate(docs_tokens):
+                if not toks:
+                    continue
+                dl = len(toks)
+                counts: dict[str, int] = {}
+                for t in toks:
+                    counts[t] = counts.get(t, 0) + 1
+                s = 0.0
+                for term in q_terms:
+                    tf = counts.get(term, 0)
+                    if not tf:
+                        continue
+                    idf = math.log((n - df.get(term, 0) + 0.5) / (df.get(term, 0) + 0.5) + 1.0)
+                    s += idf * (tf * (BM25_K1 + 1)) / (tf + BM25_K1 * (1 - BM25_B + BM25_B * dl / avgdl))
+                scores[i] += weight * s
+
+        # Exact-phrase bonus on the raw (lowercased) content.
+        needle = query.lower().strip()
+        if needle:
+            for i, e in enumerate(entries):
+                if needle in (e[1] or "").lower():
+                    scores[i] += EXACT_PHRASE_BONUS
+
+    ranked = []
+    for i, e in enumerate(entries):
+        created_at = e[4] or 0.0
+        age_days = max(0.0, (now - created_at) / 86400.0)
+        recency = 1.0 + RECENCY_BOOST_MAX * math.exp(-age_days / RECENCY_DECAY_DAYS)
+        ranked.append((*e, scores[i] * recency))
+    ranked.sort(key=lambda r: (-r[-1], -(r[4] or 0.0)))
+    return ranked
 
 
 @dataclass
@@ -51,9 +146,13 @@ class VectorMemoryBackend:
 
 class SimpleKeywordBackend(VectorMemoryBackend):
     """
-    Keyword-based memory using SQLite FTS5.
-    Works everywhere, no external dependencies needed.
-    Stores text chunks with metadata and does substring/keyword matching.
+    Keyword-based memory using SQLite + real BM25 lexical ranking (stdlib
+    math, no external dependencies). Stores text chunks with metadata and
+    ranks them by stemmed keyword relevance (BM25 k1=1.5, b=0.75), with a
+    recency boost and an exact-phrase bonus.
+
+    Honest scope: this is lexical relevance ranking, NOT embedding/semantic
+    search — queries only match words that actually appear in the entries.
     """
 
     def __init__(self, db_path: str | None = None):
@@ -111,7 +210,14 @@ class SimpleKeywordBackend(VectorMemoryBackend):
             """,
                 (entry.id, entry.content, json.dumps(entry.metadata), tags, entry.created_at, entry.access_count),
             )
-            c.execute("INSERT INTO memory_fts(memory_fts, rowid) VALUES('reindex', last_insert_rowid())")
+            # External-content FTS table: mirror the content row into the
+            # index with the same rowid (documented FTS5 external-content
+            # pattern; the 'reindex' command form is not valid SQL here).
+            c.execute(
+                "INSERT INTO memory_fts(rowid, content, tags) "
+                "SELECT rowid, content, tags FROM memory_entries WHERE id = ?",
+                (entry.id,),
+            )
             self._conn.commit()
 
     async def search(self, query: str, limit: int = 5, filters: dict | None = None) -> list[MemoryEntry]:
@@ -120,45 +226,44 @@ class SimpleKeywordBackend(VectorMemoryBackend):
         return results
 
     def _search_sync(self, query: str, limit: int, filters: dict | None) -> list[MemoryEntry]:
+        """BM25-ranked lexical search over all stored entries.
+
+        Loads candidate rows, scores them with per-field BM25 (content +
+        tags), applies the exact-phrase bonus and recency boost, and returns
+        the top `limit` entries. The `filters` dict constrains results to
+        entries whose metadata contains every given key/value pair.
+        """
         if not query.strip():
             return []
 
-        terms = query.lower().split()
+        now = time.time()
         with self._lock:
             c = self._conn.cursor()
-
-            if len(terms) == 1:
-                c.execute(
-                    """
-                    SELECT m.id, m.content, m.metadata, m.tags, m.created_at, m.access_count
-                    FROM memory_entries m
-                    WHERE LOWER(m.content) LIKE ?
-                    ORDER BY m.access_count DESC, m.created_at DESC
-                    LIMIT ?
-                """,
-                    (f"%{terms[0]}%", limit),
-                )
-            else:
-                c.execute(
-                    """
-                    SELECT m.id, m.content, m.metadata, m.tags, m.created_at, m.access_count
-                    FROM memory_entries m
-                    WHERE LOWER(m.content) LIKE ? AND LOWER(m.content) LIKE ?
-                    ORDER BY m.access_count DESC, m.created_at DESC
-                    LIMIT ?
-                """,
-                    (f"%{terms[0]}%", f"%{terms[-1]}%", limit),
-                )
-
-            rows = c.fetchall()
-            results = []
-            for row in rows:
+            c.execute(
+                """
+                SELECT m.id, m.content, m.metadata, m.tags, m.created_at, m.access_count
+                FROM memory_entries m
+            """
+            )
+            entries = []
+            for row in c.fetchall():
                 entry_id, content, metadata_json, tags, created_at, access_count = row
+                metadata = json.loads(metadata_json)
+                if filters and not all(metadata.get(k) == v for k, v in filters.items()):
+                    continue
+                entries.append((entry_id, content, metadata, tags, created_at, access_count))
+
+            if not entries:
+                return []
+
+            ranked = _bm25_rank(query, entries, now)
+            results = []
+            for entry_id, content, metadata, _tags, created_at, access_count, _score in ranked[:limit]:
                 results.append(
                     MemoryEntry(
                         id=entry_id,
                         content=content,
-                        metadata=json.loads(metadata_json),
+                        metadata=metadata,
                         created_at=created_at,
                         access_count=access_count,
                     )
@@ -174,6 +279,13 @@ class SimpleKeywordBackend(VectorMemoryBackend):
 
     def _delete_sync(self, entry_id: str) -> None:
         with self._lock:
+            # Keep the external-content FTS index in sync before removing
+            # the content row, so deleted entries stop matching searches.
+            self._conn.execute(
+                "INSERT INTO memory_fts(memory_fts, rowid) "
+                "SELECT 'delete', rowid FROM memory_entries WHERE id = ?",
+                (entry_id,),
+            )
             self._conn.execute("DELETE FROM memory_entries WHERE id = ?", (entry_id,))
             self._conn.commit()
 

@@ -4,11 +4,21 @@ import asyncio
 import json
 import os
 import readline
+import re
 import sys
 import time
 from typing import Any
 
 from ..agent import get_orchestrator
+from ..agent.orchestrator import (
+    COMPACT_KEEP_RECENT,
+    COMPACT_MESSAGE_TRIGGER,
+    COMPACT_THRESHOLD_RATIO,
+    DEFAULT_CONTEXT_WINDOW,
+    estimate_context_tokens,
+    kept_suffix,
+    summarize_messages_deterministic,
+)
 from ..agents import AgentRole, MultiAgentTeam, init_team
 from ..learn import get_learning_engine
 from ..personality import Personality, get_personality
@@ -252,7 +262,7 @@ class REPL:
             "/abort", "/think", "/safety", "/doctor", "/mcp",
             "/plugin", "/sync", "/learn", "/improve", "/reflect",
             "/skills", "/skill", "/providers", "/models",
-            "/context", "/stats", "/retry", "/undo", "/diff",
+            "/context", "/compact", "/stats", "/retry", "/undo", "/diff",
             "/status", "/phone", "/partner", "/help", "/init",
         ]
 
@@ -523,6 +533,132 @@ When using tools, always provide clear feedback about what you're doing.
         print()  # Newline after streaming
         return response_text, tool_calls
 
+    # ── Context compaction ────────────────────────────────────────────────
+
+    def _context_window_tokens(self) -> int:
+        """Provider context window: config["max_context_tokens"] when set,
+        else the 128k default."""
+        try:
+            configured = int(self.config.get("max_context_tokens", 0) or 0)
+        except Exception:
+            configured = 0
+        return configured or DEFAULT_CONTEXT_WINDOW
+
+    def _context_usage(self) -> dict[str, Any]:
+        """Estimated tokens / window / % usage for the current chat history."""
+        window = self._context_window_tokens()
+        est = estimate_context_tokens(self.messages)
+        return {
+            "tokens": est,
+            "window": window,
+            "ratio": (est / window) if window else 0.0,
+            "messages": len(self.messages),
+        }
+
+    def _context_bar(self, ratio: float, width: int = 20) -> str:
+        """Mini usage bar for /context (same glyphs as the loaders)."""
+        filled = max(0, min(width, int(round(ratio * width))))
+        return "▰" * filled + "▱" * (width - filled)
+
+    def _should_compact(self) -> bool:
+        """Over threshold: >= 60% of the estimated context window (chars/4)
+        or more than COMPACT_MESSAGE_TRIGGER messages."""
+        usage = self._context_usage()
+        return usage["messages"] > COMPACT_MESSAGE_TRIGGER or (
+            bool(usage["window"]) and usage["ratio"] >= COMPACT_THRESHOLD_RATIO
+        )
+
+    async def _summarize_messages(self, messages: list[Message], instructions: str | None = None) -> str:
+        """Summarize older turns via the provider manager with a strict
+        summarization prompt, falling back to a deterministic summary (first
+        line of each turn + tool actions) when no provider answers or the
+        summarize call fails."""
+        from ..agent.orchestrator import COMPACT_SYSTEM_PROMPT
+
+        transcript = "\n".join(f"{m.role}: {(m.content or '').strip()[:400]}" for m in messages)
+        prompt = COMPACT_SYSTEM_PROMPT
+        if instructions:
+            prompt += f"\nExtra focus from the user: {instructions}"
+        try:
+            response = await self.manager.complete(
+                [Message(role="system", content=prompt), Message(role="user", content=transcript)],
+                None,
+            )
+            text = (response.content or "").strip()
+            if text:
+                return text[:1200]
+        except Exception:
+            pass
+        return summarize_messages_deterministic(messages, instructions)
+
+    async def compact_history(self, instructions: str | None = None) -> dict[str, Any] | None:
+        """Compact chat history into one `[context compacted]` system message.
+
+        Keeps the last ~COMPACT_KEEP_RECENT messages verbatim (anchored at
+        the latest user turn so the transcript stays protocol-valid),
+        summarizes the rest, and rewrites the persisted session messages
+        atomically (Memory.save_session is temp + os.replace). Only invoked
+        between rounds / at turn start — never mid-tool-round. Returns an
+        info dict, or None when there is nothing to compact yet.
+        """
+        kept = kept_suffix(self.messages, COMPACT_KEEP_RECENT)
+        older = [m for m in self.messages[: len(self.messages) - len(kept)] if m.role != "system"]
+        if not older:
+            return None
+
+        summary = await self._summarize_messages(older, instructions)
+        compacted = Message(role="system", content=f"[context compacted] {summary}")
+        self.messages = [compacted] + kept
+
+        # Mirror the compaction into the persisted session so it stays valid
+        # and reloadable after /load or a restart.
+        kept_session = kept_suffix(self.session.messages, COMPACT_KEEP_RECENT)
+        self.session.messages = [{"role": "system", "content": compacted.content}] + kept_session
+        self.memory.save_session(self.session)
+
+        line = f"◈ context compacted: {len(older)} → {len(self.messages)} messages"
+        print(f"  \033[36m{line}\033[0m")
+        return {"compacted": len(older), "remaining": len(self.messages), "summary": summary[:200]}
+
+    # ── Strong memory: preference auto-capture ────────────────────────────
+
+    _PREFERENCE_PATTERNS = (
+        re.compile(r"\bi (?:always|never) (.+)", re.IGNORECASE),
+        re.compile(r"\b(?:always|never) (.+)", re.IGNORECASE),
+        re.compile(r"\bi prefer (.+)", re.IGNORECASE),
+        re.compile(r"\b(?:don'?t|do not) (.+)", re.IGNORECASE),
+        re.compile(r"\bfrom now on,? (.+)", re.IGNORECASE),
+    )
+
+    def _maybe_capture_preference(self, user_input: str) -> None:
+        """Auto-capture stated preferences ("always/never/prefer X") as Facts
+        (category "preference", source "auto", confidence 0.8) so strong
+        memory actually learns the user.
+
+        Dedup: the fact key is derived from the normalized statement, so a
+        preference re-stated updates the existing fact instead of duplicating
+        it. Never raises — capture must not break the turn.
+        """
+        text = (user_input or "").strip()
+        if len(text) < 8 or text.startswith("/"):
+            return
+        match = None
+        for pattern in self._PREFERENCE_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                break
+        if not match:
+            return
+        value = match.group(1).strip().rstrip(".!?")[:200]
+        if not value:
+            return
+        words = re.findall(r"[a-z0-9]+", text.lower())[:8]
+        key = "pref_" + "_".join(words)
+        try:
+            self.memory.add_fact(key, value, category="preference", confidence=0.8, source="auto")
+        except Exception:
+            pass
+
     async def _generate_response(self, user_input: str, print_result: bool = True) -> str:
         """Generate a response from the AI with a real ReAct loop.
 
@@ -541,6 +677,17 @@ When using tools, always provide clear feedback about what you're doing.
 
         # Visual 'Context Pulse'
         self._show_context_pulse()
+
+        # Strong memory: auto-capture stated preferences before the turn runs.
+        self._maybe_capture_preference(user_input)
+
+        # Context compaction at turn start (never mid-tool-round): summarize
+        # older history into one system message when over threshold.
+        if self._should_compact():
+            try:
+                await self.compact_history()
+            except Exception:
+                pass
 
         # Persist the user turn (in-memory history + session store)
         self.messages.append(Message(role="user", content=user_input))
@@ -793,6 +940,7 @@ When using tools, always provide clear feedback about what you're doing.
                 ("/init", "Scan project, generate NEXUS.md context"),
                 ("/clear", "Clear conversation"),
                 ("/history", "Show message history"),
+                ("/compact [focus]", "Compact history into a summary"),
                 ("/tools", "List available tools"),
                 ("/model <name>", "Switch model"),
                 ("/stream", "Toggle streaming mode"),
@@ -815,7 +963,7 @@ When using tools, always provide clear feedback about what you're doing.
                 ("/skill <name>", "Activate a skill"),
                 ("/providers", "List configured providers"),
                 ("/models", "List available models"),
-                ("/context", "Show memory context"),
+                ("/context", "Show context usage + memory"),
                 ("/stats", "Show session statistics"),
                 ("/reflect", "Session reflection"),
                 ("/mcp", "MCP server management"),
@@ -1081,7 +1229,26 @@ When using tools, always provide clear feedback about what you're doing.
                 print(f"  [{provider.name}] {provider.model}")
             return True
 
+        elif cmd == "compact":
+            result = await self.compact_history(args or None)
+            if result is None:
+                print("Nothing to compact yet (fewer than the kept recent messages).")
+            else:
+                print(f"  \033[90m~{self._context_usage()['tokens']:,} tokens estimated now\033[0m")
+            return True
+
         elif cmd == "context":
+            usage = self._context_usage()
+            pct = usage["ratio"] * 100
+            print("\nContext usage:")
+            print(
+                f"  ~{usage['tokens']:,} / {usage['window']:,} tokens ({pct:.0f}%)  "
+                f"{self._context_bar(usage['ratio'])}"
+            )
+            print(
+                f"  Messages: {usage['messages']} "
+                f"(compact at >{COMPACT_MESSAGE_TRIGGER} msgs or {COMPACT_THRESHOLD_RATIO:.0%} of window)"
+            )
             print("\n" + self.memory.get_context_summary())
             return True
 

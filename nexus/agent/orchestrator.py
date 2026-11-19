@@ -12,8 +12,6 @@ from ..agent.reflection import ReflectionEngine
 from ..agents import AgentRole, MultiAgentTeam
 from ..errors import NexusError
 from ..memory import Memory
-from ..orchestrator.decomposer import LLMAwareDecomposer
-from ..orchestrator.executor import ExecutionEngine
 from ..plugins import get_plugin_manager
 from ..providers import Message, ProviderManager, ToolCall
 from ..safety import get_safety_engine
@@ -63,6 +61,70 @@ def prune_messages(
         other_messages = other_messages[1:]
 
     return system_messages + other_messages
+
+
+# ── Context compaction (chars/4 estimate + LLM summarization) ────────────
+DEFAULT_CONTEXT_WINDOW = 128_000
+COMPACT_THRESHOLD_RATIO = 0.6   # compact when est. tokens >= 60% of window
+COMPACT_MESSAGE_TRIGGER = 40    # ...or when history grows past this many msgs
+COMPACT_KEEP_RECENT = 8         # recent messages always kept verbatim
+
+COMPACT_SYSTEM_PROMPT = (
+    "You are a conversation compactor. Summarize the transcript below for an "
+    "AI assistant that must continue the work with no other context. Capture: "
+    "the user's goals and stated preferences, key decisions, important facts "
+    "and file paths, tool actions taken and their outcomes, and the current "
+    "state / next steps. Be terse and factual; no preamble; maximum 300 words."
+)
+
+
+def _msg_role(m: Any) -> str:
+    """Role of a Message or a session-store dict entry."""
+    return m.get("role") if isinstance(m, dict) else m.role
+
+
+def _msg_content(m: Any) -> str:
+    """Content of a Message or a session-store dict entry."""
+    return (m.get("content") if isinstance(m, dict) else m.content) or ""
+
+
+def estimate_context_tokens(messages: list) -> int:
+    """Estimate request-context size in tokens with the chars/4 heuristic."""
+    return sum(len(_msg_content(m)) for m in messages) // 4
+
+
+def kept_suffix(messages: list, keep: int = COMPACT_KEEP_RECENT) -> list:
+    """Trailing slice kept verbatim, protocol-valid at its front edge.
+
+    Keeps the last `keep` messages. If the slice starts with dangling
+    role="tool" results whose tool_calls message was summarized away, they
+    are trimmed so the compacted transcript stays protocol-valid.
+    """
+    if not messages:
+        return []
+    kept = list(messages[-keep:])
+    while kept and _msg_role(kept[0]) == "tool":
+        kept.pop(0)
+    return kept
+
+
+def summarize_messages_deterministic(messages: list, instructions: str | None = None) -> str:
+    """Deterministic compaction summary used when no provider is available
+    or the summarize call fails: first line of each turn plus tool actions."""
+    lines = []
+    for m in messages:
+        role = _msg_role(m)
+        first = _msg_content(m).strip().split("\n", 1)[0][:150]
+        if role == "tool":
+            name = m.get("name") if isinstance(m, dict) else m.name
+            if first:
+                lines.append(f"tool {name or ''}: {first}")
+        elif first:
+            lines.append(f"{role}: {first}")
+    out = "Deterministic summary (LLM summarizer unavailable):\n" + "\n".join(lines[:80])
+    if instructions:
+        out += f"\nFocus requested: {instructions}"
+    return out
 
 
 @dataclass
@@ -124,8 +186,6 @@ class AgentOrchestrator:
         self.pm = provider_manager
         self.tools = tool_registry
         self.memory = memory
-        self.decomposer = LLMAwareDecomposer()
-        self.executor = ExecutionEngine(self.tools, self._execute_tool_callback, llm_callback=self._execute_llm_callback, provider_manager=self.pm)
         self.config = config or AgentConfig()
         self.reflection_engine = ReflectionEngine(Path("./.nexus/sessions"))
 
@@ -166,19 +226,6 @@ class AgentOrchestrator:
             except Exception:
                 self._session = None
 
-    async def _execute_tool_callback(self, name: str, args: dict[str, Any]) -> ToolResult:
-        """Bridge for ExecutionEngine to call tools."""
-        tool = self.tools.get(name)
-        if not tool:
-            return ToolResult(success=False, content="", error=f"Tool {name} not found")
-        return await tool.execute(**args)
-
-    async def _execute_llm_callback(self, prompt: str, provider_name: str | None = None) -> str:
-        """Bridge for ExecutionEngine to call LLM."""
-        messages = [Message(role="user", content=prompt)]
-        response = await self.pm.complete(messages, provider_name=provider_name)
-        return response.content
-
     def set_ui_callback(self, callback: Callable[[str, Any], None]):
         """Set a callback to notify the UI of state changes."""
         self._ui_callback = callback
@@ -187,27 +234,6 @@ class AgentOrchestrator:
         """Notify the UI of a state change."""
         if self._ui_callback:
             self._ui_callback(event_type, data)
-
-    async def run_complex_task(self, goal: str):
-        """Unified entry point for decomposing and executing complex tasks."""
-        try:
-            # 1. Decompose
-            plan = await self.decomposer.decompose(goal, context={}, registry=self.tools)
-            self._notify_ui("thinking", {"description": f"Decomposed into {len(plan.steps)} steps"})
-
-            # 2. Execute steps
-            results = []
-            for step in plan.steps:
-                self._notify_ui("thinking", {"description": f"Executing: {step.description}"})
-                result = await self.executor.execute_step(step)
-                results.append(result)
-
-            self.reflection_engine.perform_reflection()
-            return results
-        except Exception as e:
-            error_msg = format_error(e)
-            self._notify_ui("error", error_msg)
-            raise NexusError(str(e), user_friendly=error_msg) from e
 
     @property
     def team(self) -> MultiAgentTeam | None:
@@ -241,6 +267,102 @@ class AgentOrchestrator:
         if self.config.system_prompt:
             self._messages[0] = Message(role="system", content=self.config.system_prompt + "\n\n" + prompt)
 
+    # ── context compaction ──────────────────────────────────────────────
+    def context_window_tokens(self) -> int:
+        """Provider context window: config override where available, else 128k."""
+        return int(getattr(self.config, "max_context_tokens", 0) or 0) or DEFAULT_CONTEXT_WINDOW
+
+    def context_usage(self) -> dict[str, Any]:
+        """Estimated tokens / window / message count for /context-style surfaces."""
+        window = self.context_window_tokens()
+        est = estimate_context_tokens(self._messages)
+        return {
+            "tokens": est,
+            "window": window,
+            "ratio": (est / window) if window else 0.0,
+            "messages": len(self._messages),
+        }
+
+    def should_compact(self) -> bool:
+        """True when history is over the compaction threshold (>= 60% of the
+        estimated context window, or more than COMPACT_MESSAGE_TRIGGER messages)."""
+        usage = self.context_usage()
+        return usage["messages"] > COMPACT_MESSAGE_TRIGGER or (
+            bool(usage["window"]) and usage["ratio"] >= COMPACT_THRESHOLD_RATIO
+        )
+
+    async def compact_context(self, instructions: str | None = None, force: bool = False) -> dict[str, Any] | None:
+        """Compact conversation history into one system summary message.
+
+        Keeps the last ~COMPACT_KEEP_RECENT messages verbatim (anchored at a
+        user turn so the transcript stays protocol-valid), summarizes the
+        older messages via the provider manager with a strict summarization
+        prompt, and replaces them with a single `[context compacted]` system
+        message. Falls back to a deterministic summary when the provider is
+        unavailable or the summarize call fails. The persisted session is
+        rewritten atomically to mirror the compaction.
+
+        Only invoked between rounds / at turn start — never mid-tool-round.
+        Returns an info dict, or None when nothing needed compacting.
+        """
+        if not force and not self.should_compact():
+            return None
+
+        kept = kept_suffix(self._messages, COMPACT_KEEP_RECENT)
+        head = self._messages[: len(self._messages) - len(kept)]
+        older = [m for m in head if m.role != "system"]
+        if not older:
+            return None
+
+        summary = await self._summarize_messages(older, instructions)
+        compacted = Message(role="system", content=f"[context compacted] {summary}")
+        self._messages = [m for m in head if m.role == "system"] + [compacted] + kept
+
+        # Keep the persisted session valid: mirror the compaction and write
+        # atomically (Memory.save_session uses temp + os.replace).
+        if self.memory is not None and self._session is not None:
+            try:
+                kept_session = kept_suffix(self._session.messages, COMPACT_KEEP_RECENT)
+                self._session.messages = [{"role": "system", "content": compacted.content}] + kept_session
+                self.memory.save_session(self._session)
+            except Exception:
+                pass
+
+        info = {
+            "compacted": len(older),
+            "remaining": len(self._messages),
+            "auto": not force,
+            "summary": summary[:200],
+        }
+        line = f"◈ context compacted: {info['compacted']} → {info['remaining']} messages"
+        step = self._thinking.start_step(
+            ThinkingState.ANALYZING,
+            line,
+            detail="Context threshold reached; older history summarized into one system message.",
+        )
+        self._thinking.finish_step(step, result=summary[:200])
+        # UI bridge: surfaces as a system message in TUI state.
+        self._notify_ui("system_message", {"content": line})
+        return info
+
+    async def _summarize_messages(self, messages: list, instructions: str | None = None) -> str:
+        """Summarize older turns via the provider, with a deterministic fallback."""
+        transcript = "\n".join(f"{_msg_role(m)}: {_msg_content(m).strip()[:400]}" for m in messages)
+        prompt = COMPACT_SYSTEM_PROMPT
+        if instructions:
+            prompt += f"\nExtra focus from the user: {instructions}"
+        try:
+            response = await self.pm.complete(
+                messages=[Message(role="system", content=prompt), Message(role="user", content=transcript)],
+                provider_name=self.config.provider_name,
+            )
+            text = (response.content or "").strip()
+            if text:
+                return text[:1200]
+        except Exception:
+            pass
+        return summarize_messages_deterministic(messages, instructions)
+
     async def run(self, user_input: str, stream_callback=None, thinking_callback=None) -> Turn:
         """Run a single interaction turn."""
         start = time.monotonic()
@@ -261,6 +383,14 @@ class AgentOrchestrator:
         analyze_step = self._thinking.start_step(
             ThinkingState.ANALYZING, "Analyzing task...", detail=f"Input: {user_input[:100]}..." if len(user_input) > 100 else f"Input: {user_input}"
         )
+
+        # Context compaction at turn start (never mid-tool-round): when the
+        # estimated context is over threshold, summarize older history into
+        # one system message before this turn is appended.
+        try:
+            await self.compact_context()
+        except Exception:
+            pass
 
         self._messages.append(Message(role="user", content=user_input))
 
