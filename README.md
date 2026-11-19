@@ -27,8 +27,13 @@
 *   **`/init` Project Context:** One command scans your project (git, languages, manifests, build commands) and generates a `NEXUS.md` context file injected into every turn — like Claude Code's `/init`, works with zero LLM configured.
 *   **Neural OS Core:** Built on a "Governor" pattern that manages the lifecycle of memory, tools, and orchestration subsystems.
 *   **Real Memory Layer:** Facts, session history, and recall are consulted on every turn — not just stored.
-*   **382 Bundled Skills + 92-Server MCP Marketplace:** `nexus skill search`, `nexus mcp catalog/search/install` — a curated library ported from the community, available offline out of the box.
-*   **Atmospheric TUI:** Claude Code-class transcript with timestamps, collapsible tool-call cards, live unified-diff rendering for every edit, streaming responses with a blinking cursor, and live Thinking/Tools/Agents panels.
+*   **382 Bundled Skills + 92-Server MCP Marketplace:** `nexus skill search`, `nexus mcp catalog/search/install` — a curated library ported from the community, available offline out of the box. Relevant skills are **pre-loaded automatically** before every turn (`⚡ N skills loaded` in the TUI).
+*   **Plugin Auto-Discovery:** Drop a `.py` file into `~/.nexus/plugins/` and its tools register into the agent automatically — broken plugins fail isolated, never crashing boot. `nexus discover` maps your device (platform, installed packages, PATH tools) and **skips already-present dependencies instead of re-downloading them**.
+*   **Context Compaction:** Long sessions auto-compact at 60% of the context window — older turns summarized into one system message, recent context kept verbatim. `/compact` and `/context` give manual control.
+*   **Themes & User Settings:** 5 built-in themes (neural-cyan, synthwave, matrix, amber-crt, mono) with a live-apply `/settings` modal (ctrl+s) persisted to `~/.nexus/settings.json`. Provider-aware identity: the NEXUS logo, badges and status bar tint with the connected provider's brand color.
+*   **Security-Hardened Tools:** GitTool executes argv-only with argument validation (no shell injection), a real denylist blocks destructive commands behind an approval gate, and the dashboard requires a token for all mutating routes.
+*   **Context-Aware Memory:** Real BM25 lexical recall (not keyword LIKE) over a persistent SQLite store with recency boosting, plus automatic preference capture — "always/never/prefer" statements become facts.
+*   **Atmospheric TUI:** Claude Code-class transcript with timestamps, collapsible tool-call cards, live unified-diff rendering for every edit, streaming responses with a blinking cursor, agentic boot checklist, and live Thinking/Tools/Agents panels.
 *   **GIA Web Dashboard:** A dark, ChatGPT/LibreChat-style chat interface in the browser, with real token streaming, wired to the same agent core as the CLI.
 *   **Offline-First & Local:** Designed for Termux/Mobile, Nexus is optimized for low-bandwidth, high-latency environments.
 
@@ -39,8 +44,8 @@
 Nexus operates on a multi-layer Neural OS architecture:
 1.  **Orchestrator:** The primary agent lead that delegates tasks based on task complexity, with memory recall/persistence wired into every turn.
 2.  **Vector-Mesh Memory:** A persistent SQLite-backed memory store providing long-term project context.
-3.  **Resilience Layer:** A circuit-breaker and doctor module that monitors sub-agent health in real-time.
-4.  **Plugin System:** A drop-in architecture for extending core OS capabilities.
+3.  **Resilience Layer:** A per-provider circuit breaker (3 consecutive failures → 120s cooldown → half-open probe) composes with free-tier rotation; `nexus doctor` reports system health.
+4.  **Plugin System:** Auto-discovered tool plugins (`~/.nexus/plugins/`) plus the bundled 92-server MCP marketplace register into the same ToolRegistry the agent uses.
 5.  **GIA Dashboard:** A Flask-based web layer exposing the same agent core over HTTP/SSE, for a browser-based chat experience.
 
 ---
@@ -104,9 +109,9 @@ nexus skill search python   # search the bundled skill library
 
 ## 📸 Screenshots
 
-| Boot | Termux (90×30) |
-|---|---|
-| ![Nexus boot card](assets/screenshots/tui-boot.png) | ![Nexus on Termux](assets/screenshots/tui-termux.png) |
+| Boot (neural-cyan) | Synthwave theme | Termux (90×30) |
+|---|---|---|
+| ![Nexus boot checklist and welcome card](assets/screenshots/tui-boot.png) | ![Nexus synthwave theme](assets/screenshots/tui-synthwave.png) | ![Nexus on Termux](assets/screenshots/tui-termux.png) |
 
 ---
 
