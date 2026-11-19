@@ -1141,6 +1141,7 @@ When using tools, always provide clear feedback about what you're doing.
                 print(f"{cyan}  ║{reset}  {dim}{cmd:<20}{reset} {desc:<30} {cyan}║{reset}")
             print(f"{cyan}  ╚══════════════════════════════════════════════════════╝{reset}")
             print(f"  {dim}Tab-complete commands by typing / and pressing Tab{reset}")
+            print(f"  {dim}Message queue is TUI only — the REPL runs each turn inline, mid-turn type-ahead is not possible{reset}")
             return True
 
         elif cmd == "init":
@@ -1870,6 +1871,9 @@ When using tools, always provide clear feedback about what you're doing.
                 if await self._handle_command(line):
                     continue
 
+                # Long pastes echo as a compact chip (full text still sent)
+                line = self._echo_paste_chip(line)
+
                 # Handle regular input
                 await self._generate_response(line)
 
@@ -1887,6 +1891,27 @@ When using tools, always provide clear feedback about what you're doing.
         summary = self.learning.end_session(self.session.id, "completed")
         if summary.get("failures", 0) > 0:
             print(f"\n{self.personality.reflection_ask()}")
+
+    def _echo_paste_chip(self, text: str) -> str:
+        """Echo a compact chip instead of a raw dump for very long inputs.
+
+        The REPL's transcript IS the terminal echo, so an input over the
+        paste_collapse_lines setting prints one dim
+        `[Pasted text #N +M lines]` chip line (same store/format as the
+        TUI, in memory only) and the full text is returned unchanged —
+        the agent still receives every line.
+        """
+        try:
+            from ..tui.paste import collapse_paste
+            from ..tui.settings import get_settings
+
+            chip = collapse_paste(text, get_settings().paste_collapse_lines)
+        except Exception:
+            return text  # paste plumbing is best-effort, never fatal
+        if chip is None:
+            return text
+        print(f"  {_style(chip, 'bright_black')}")
+        return text
 
     def _on_team_message(self, msg) -> None:
         """Handle incoming team messages."""

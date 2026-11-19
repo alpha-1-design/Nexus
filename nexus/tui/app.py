@@ -32,6 +32,7 @@ from .state import (
     get_state_manager,
 )
 from .task_wrapper import OrchestrationTask
+from .paste import get_paste_store, resolve_chips, summarize_for_queue
 from .widgets import (
     AgentsPanel,
     BootChecklist,
@@ -39,6 +40,7 @@ from .widgets import (
     ChatPanel,
     CommandEntered,
     InputBar,
+    QueueBar,
     SlashCommandDropdown,
     StatusBar,
     SystemMonitor,
@@ -134,6 +136,11 @@ class NexusTUI(App):
         Binding("ctrl+t", "toggle_tools", "Tools"),
         Binding("ctrl+a", "toggle_agents", "Agents"),
         Binding("ctrl+s", "open_settings", "Settings"),
+        Binding("ctrl+o", "toggle_paste_expand", "Pastes"),
+        # priority=True: the focused Input binds ctrl+u as "clear line"
+        # (Textual stock), which would swallow the key before the app
+        # binding — send-now wins, matching the busy type-ahead keymap.
+        Binding("ctrl+u", "send_now", "Send now", priority=True),
         # Deliberately NOT priority: a priority app binding would swallow Esc
         # while a modal screen (settings) is open, so its own Esc-to-close
         # could never fire. Namespace order (focused → screen → app) already
@@ -175,6 +182,14 @@ class NexusTUI(App):
         self._agent_name = "nexus-core"
         self._panel_recency: dict[str, int] = {}
         self._panel_seq = 0
+        # Message queue (type-ahead): while a turn is running, Enter queues
+        # the message instead of starting a turn; the FIFO flushes when the
+        # current turn ends. `_turn_task` is the live turn (the streaming
+        # task) — ctrl+u cancels it, then the queue flushes immediately.
+        self._queued_messages: list[str] = []
+        self._turn_task: asyncio.Task | None = None
+        self._turn_active = False
+        self._interrupting = False
 
     # ── orchestrator event channels ─────────────────────────────
 
@@ -358,7 +373,13 @@ class NexusTUI(App):
             status_bar = self.query_one("#status-bar")
         except Exception:
             return  # compose not finished yet
-        fixed = monitor.outer_size.height + input_bar.outer_size.height + status_bar.outer_size.height
+        # Queued rows live INSIDE the input bar (auto height), so the fixed
+        # chrome grows with the queue and the chat floor still holds.
+        fixed = (
+            monitor.outer_size.height
+            + input_bar.outer_size.height
+            + status_bar.outer_size.height
+        )
         available = max(0, height - fixed - chat_floor)
 
         # Most recently active panel first.
@@ -506,6 +527,74 @@ class NexusTUI(App):
         self.query_one("#agents-panel", AgentsPanel).toggle_visibility()
         self._relayout_panels()
 
+    # ── paste chips + message queue ───────────────────────────────
+
+    def action_toggle_paste_expand(self) -> None:
+        """ctrl+o: expand/collapse paste chips in the transcript.
+
+        Expanded = the full pasted text renders dim-wrapped in place of the
+        chip; collapse restores the compact chip. Pure view state (in the
+        paste store), so a toggle just re-mounts the transcript."""
+        store = get_paste_store()
+        store.expanded = not store.expanded
+        try:
+            self.query_one("#chat-panel", ChatPanel).rerender()
+        except Exception:
+            pass  # transcript cleared / not mounted
+
+    def action_send_now(self) -> None:
+        """ctrl+u: interrupt the running turn and flush the queue now.
+
+        The cancelled turn's finally block is the single flush driver, so
+        the next queued message starts as soon as the cancellation unwinds
+        (one loop tick later) — no second flush path, no double-run. While
+        idle (no turn, nothing queued) this is deliberately a no-op.
+        """
+        state = self.state_manager.state
+        if self._interrupting or not (self._turn_active or state.is_busy):
+            return
+        task = self._turn_task
+        if task is None or task.done():
+            return
+        self._interrupting = True
+        task.cancel()
+        chat_panel = self.query_one("#chat-panel", ChatPanel)
+        chat_panel.add_message(ChatMessage(
+            role=MessageRole.SYSTEM,
+            content="⏹ interrupted",
+            timestamp=datetime.now(),
+        ))
+
+    def _update_queue_bar(self) -> None:
+        """Render queued rows + busy hint above the input (hidden when empty)."""
+        try:
+            bar = self.query_one("#queue-rows", QueueBar)
+        except Exception:
+            return  # not mounted yet
+        markup = bar.render_queued(
+            self._queued_messages,
+            self._turn_active or self.state_manager.state.is_busy,
+        )
+        bar.set_class(not self._queued_messages, "hidden")
+        bar.update(markup)
+
+    def _flush_queue(self) -> None:
+        """Start the next queued message as a fresh turn (FIFO).
+
+        Called from the turn's finally block (the ONLY flush driver), so a
+        finished turn — completed, errored or ctrl+u-cancelled — always
+        drains the queue in order, one sequential turn at a time. No-ops
+        when a turn is somehow still active or the queue is empty."""
+        if self._turn_active or self.state_manager.state.is_busy:
+            return
+        if not self._queued_messages:
+            self._update_queue_bar()
+            return
+        nxt = self._queued_messages.pop(0)
+        self._update_queue_bar()
+        task = OrchestrationTask(self, self._process_input(nxt))
+        self._turn_task = asyncio.create_task(task.run())
+
     # ── settings + themes (live, persistent) ──────────────────────
 
     def action_open_settings(self) -> None:
@@ -573,10 +662,14 @@ class NexusTUI(App):
   ctrl+p  command palette      ctrl+l  clear chat
   ctrl+g  thinking panel       ctrl+t  tools panel
   ctrl+a  agents panel         ctrl+s  settings & themes
+  ctrl+o  expand paste chips   ctrl+u  send queued now
   f1      this help
 
+  Long pastes collapse to chips ([Pasted text #N +M lines]) — the agent
+  still receives the full text. While busy, enter queues a message.
+
   /help /settings /theme /clear /history /tools /model /provider
-  /session /facts /doctor /mcp /voice /exit
+  /session /facts /doctor /mcp /queue /voice /exit
         """
         chat_panel = self.query_one("#chat-panel", ChatPanel)
         chat_panel.add_message(ChatMessage(
@@ -674,6 +767,28 @@ class NexusTUI(App):
                 f"  {i+1}. {c}" for i, c in enumerate(self._command_history[-10:])
             )
             system_msg(text)
+            return True
+
+        if cmd == "queue":
+            # Type-ahead queue: bare lists it, `clear` empties it. Works
+            # while busy too (commands bypass the queue).
+            if args.strip().lower() == "clear":
+                dropped = len(self._queued_messages)
+                self._queued_messages.clear()
+                self._update_queue_bar()
+                system_msg(f"Queue cleared ({dropped} dropped)" if dropped else "Queue is empty")
+                return True
+            if not self._queued_messages:
+                system_msg("queue is empty")
+                return True
+            lines = [
+                f"  {i}. {summarize_for_queue(item, 60)}"
+                for i, item in enumerate(self._queued_messages, 1)
+            ]
+            system_msg(
+                "Queued messages (flush when the current turn ends):\n"
+                + "\n".join(lines)
+            )
             return True
 
         if cmd == "tools":
@@ -860,6 +975,23 @@ class NexusTUI(App):
             return
 
         chat_panel = self.query_one("#chat-panel", ChatPanel)
+
+        # Message queue: while a turn is running, Enter QUEUES the message
+        # (FIFO) instead of starting a turn. Queued input stays intact — it
+        # is flushed in order when the current turn finishes, each as its
+        # own sequential turn back through this exact same path.
+        if self._turn_active or self.state_manager.state.is_busy:
+            self._queued_messages.append(user_input)
+            self._update_queue_bar()
+            return
+
+        # Paste chips: the input holds compact chip tokens; the agent
+        # payload resolves them back to the full stored text (in memory
+        # only — never files). Unknown chip numbers pass through untouched.
+        payload = resolve_chips(user_input)
+
+        # The transcript renders the chip-mixed text the user actually sees
+        # in the input, not the raw dump.
         user_msg = ChatMessage(
             role=MessageRole.USER,
             content=user_input,
@@ -868,6 +1000,13 @@ class NexusTUI(App):
         chat_panel.add_message(user_msg)
         self.state_manager.record_message(user_msg)
 
+        self._turn_active = True
+        self._interrupting = False
+        # This coroutine IS the live turn (it runs inside the
+        # OrchestrationTask wrapper): track its task so ctrl+u cancels the
+        # right one — queued inputs create their own (short-lived) tasks
+        # here and must never overwrite the handle while a turn runs.
+        self._turn_task = asyncio.current_task()
         self.state_manager.set_busy(True)
         self.state_manager.clear_thinking()
         self._seen_thinking_steps = set()
@@ -905,7 +1044,7 @@ class NexusTUI(App):
                     if widgets:
                         widgets[-1].refresh_content()
 
-            turn = await orchestrator.run(user_input, stream_callback=stream_callback)
+            turn = await orchestrator.run(payload, stream_callback=stream_callback)
 
             chat_panel.end_streaming(final_content=turn.assistant_message or None)
             self._stream_msg = None
@@ -954,7 +1093,12 @@ class NexusTUI(App):
             self.state_manager.set_error(str(e))
             self.state_manager.update_agent_status(self._agent_name, AgentStatus.ERROR, "turn failed")
         finally:
+            # Single flush driver: whether the turn completed, failed or was
+            # ctrl+u-cancelled, the queue drains here in FIFO order.
+            self._turn_active = False
+            self._interrupting = False
             self.state_manager.set_busy(False)
+            self._flush_queue()
 
     def _handle_pending_approval(self, approval: dict[str, Any]) -> None:
         result = approval.get("result")

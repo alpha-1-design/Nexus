@@ -29,6 +29,7 @@ from .colors import (
     get_provider_brand_color,
     on_theme_change,
 )
+from .paste import collapse_paste, expand_segments, get_paste_store, summarize_for_queue
 from .settings import (
     TUISettings,
     format_timestamp,
@@ -293,10 +294,26 @@ class ChatMessageWidget(Container):
             content = f"[{self.message.tool_name}] {content}"
         for tc in self.message.tool_calls:
             content += f"\n[tool call: {tc.get('name', 'unknown')}]"
-        text = Text(content)
+        text = self._render_paste_chips(content)
         text = apply_inline_markup(text)
         if self.message.streaming and self._cursor_on and get_settings().streaming_cursor:
             text.append("▌", style=CSS_COLORS["accent"])
+        return text
+
+    def _render_paste_chips(self, content: str) -> Text:
+        """User messages render paste chips compactly; ctrl+o (paste store
+        expanded) swaps each chip for its full stored text, dim-wrapped."""
+        if self.message.role != MessageRole.USER:
+            return Text(content)
+        store = get_paste_store()
+        if not store.expanded:
+            return Text(content)
+        text = Text()
+        for segment, is_paste in expand_segments(content, store):
+            if is_paste:
+                text.append(segment, style=CSS_COLORS["text_dim"])
+            else:
+                text.append_text(apply_inline_markup(Text(segment)))
         return text
 
     # Kept for API compat with earlier revisions / external callers: returns
@@ -1121,6 +1138,33 @@ class LoadingIndicator(Static):
         return f"{char} {self.message}"
 
 
+class NexusInput(Input):
+    """Single-line command input with paste-awareness.
+
+    Textual's stock Input keeps only the FIRST line of a multi-line paste
+    and silently drops the rest. Here: a block over the
+    paste_collapse_lines setting collapses to a chip token
+    (`[Pasted text #N +M lines]`) with the full text kept in the in-memory
+    paste store; shorter pastes are inserted whole (newlines flattened to
+    spaces — one paste event is one edit, so a multi-line paste can never
+    accidentally submit a partial first line).
+    """
+
+    def _on_paste(self, event: events.Paste) -> None:
+        text = event.text or ""
+        if not text:
+            event.stop()
+            return
+        chip = collapse_paste(text, get_settings().paste_collapse_lines)
+        insertion = chip if chip is not None else " ".join(text.splitlines())
+        selection = self.selection
+        if selection.is_empty:
+            self.insert_text_at_cursor(insertion)
+        else:
+            self.replace(insertion, *selection)
+        event.stop()
+
+
 class InputBar(Container):
     """Command input bar with history, completion and a dim keybind hint."""
 
@@ -1133,9 +1177,13 @@ class InputBar(Container):
         self._history_position = 0
 
     def compose(self) -> ComposeResult:
+        # Queued-message strip lives INSIDE the boxed prompt (above the
+        # input row): a second dock-bottom widget would overlap the input
+        # box in Textual 8. Hidden when the queue is empty.
+        yield QueueBar(id="queue-rows", classes="hidden")
         with Horizontal(classes="input-row"):
             yield Static("CMD:>", classes="prompt")
-            yield Input(
+            yield NexusInput(
                 placeholder="Ask anything… /help for commands",
                 id="command-input",
                 classes="input-field",
@@ -1212,6 +1260,37 @@ class InputBar(Container):
         return False
 
 
+class QueueBar(Static):
+    """Queued-message strip rendered above the input line (inside the input
+    bar box).
+
+    One dim row per queued message — `⎿ queued: <first ~60 chars>` — plus
+    the type-ahead hint. Hidden when the queue is empty; rows flatten
+    newlines and truncate so the strip always fits a 90-col Termux screen.
+    Mounted inside InputBar: a second dock-bottom widget would overlap the
+    prompt box in Textual 8.
+    """
+
+    QUEUE_ROW_PREFIX = "⎿ queued: "
+    BUSY_HINT = "busy — enter=queue · ctrl+u=send now"
+
+    def __init__(self, **kwargs):
+        super().__init__("", **kwargs)
+
+    def render_queued(self, items: list[str], busy: bool) -> str:
+        """Markup for the current queue (empty string → widget hidden)."""
+        if not items:
+            return ""
+        lines = [
+            f"[{CSS_COLORS['text_dim']}]{self.QUEUE_ROW_PREFIX}"
+            f"{escape(summarize_for_queue(item, 60))}[/]"
+            for item in items
+        ]
+        if busy:
+            lines.append(f"[{CSS_COLORS['accent']}]{self.BUSY_HINT}[/]")
+        return "\n".join(lines)
+
+
 class CommandEntered(events.Message):
     """Message sent when user enters a command."""
 
@@ -1249,6 +1328,7 @@ class SlashCommandDropdown(Container):
         ("/improve", "Self-improvement"),
         ("/plugins", "Tool plugin cards (--reload rescans)"),
         ("/discover", "Environment + project sniff"),
+        ("/queue", "List/clear queued messages (type-ahead)"),
         ("/exit", "Exit Nexus"),
     ]
 

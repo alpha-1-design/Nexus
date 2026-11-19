@@ -38,6 +38,9 @@ class TUISettings:
     # Panel ids the user pinned open (e.g. ["tool-panel"]); restored at boot.
     pinned_panels: list[str] = field(default_factory=list)
     sidebar_animations: bool = True
+    # Pastes longer than this many lines collapse to a chip in the input
+    # (full text kept in memory, resolved when the message is sent).
+    paste_collapse_lines: int = 15
 
 
 def default_settings_path() -> str:
@@ -105,6 +108,9 @@ def load_settings(path: str | None = None) -> tuple[TUISettings, list[str]]:
     if settings.spinner_style not in SPINNER_STYLES:
         notes.append(f"spinner_style '{settings.spinner_style}' not recognized, reset to braille")
         settings.spinner_style = "braille"
+    if settings.paste_collapse_lines < 1:
+        notes.append("paste_collapse_lines must be >= 1, reset to 15")
+        settings.paste_collapse_lines = 15
 
     return settings, notes
 
@@ -254,6 +260,8 @@ class SettingsModel:
             SettingRow("Behavior", "show diffs", lambda: s.show_diffs, _set("show_diffs")),
             SettingRow("Behavior", "streaming cursor", lambda: s.streaming_cursor, _set("streaming_cursor")),
             SettingRow("Behavior", "compact mode", lambda: s.compact_mode, _set("compact_mode")),
+            SettingRow("Behavior", "paste collapse lines", lambda: s.paste_collapse_lines,
+                       _set("paste_collapse_lines"), choices=[5, 10, 15, 20, 30, 50]),
             SettingRow("Panels", "pin thinking panel", lambda: "thinking-panel" in s.pinned_panels,
                        _set_pinned("thinking-panel")),
             SettingRow("Panels", "pin tools panel", lambda: "tool-panel" in s.pinned_panels,

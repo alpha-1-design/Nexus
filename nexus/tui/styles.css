@@ -262,6 +262,18 @@ ChatMessageWidget.compact .msg-provenance {
     padding: 0 0 0 8;
 }
 
+/* ── Queue bar ─────────────────────────────────────────────────
+ * Type-ahead strip INSIDE the input bar, above the input row: one dim row
+ * per queued message + the busy hint. Hidden entirely when the queue is
+ * empty (display: none via .hidden). */
+
+#queue-rows {
+    height: auto;
+    max-height: 8;
+    color: $text-dim;
+    padding: 0 0 0 8;
+}
+
 /* ── Status bar ────────────────────────────────────────────────
  * Single unobtrusive dim line at the very bottom. */
 
